@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "client-guard"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "openpiso-core",
  "serde",
@@ -2916,7 +2916,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openpiso-admin"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "argon2",
  "auto-launch",
@@ -2954,7 +2954,7 @@ dependencies = [
 
 [[package]]
 name = "openpiso-client"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "argon2",
  "axum",
@@ -2980,7 +2980,7 @@ dependencies = [
 
 [[package]]
 name = "openpiso-core"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "chrono",
  "serde",
