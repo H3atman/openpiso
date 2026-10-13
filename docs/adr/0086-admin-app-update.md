@@ -20,8 +20,9 @@ Source publication is now governed by ADR-0087.
 
 - **Updater:** `tauri-plugin-updater`, Admin only. Clients keep their manual
   path. Stable releases only; no release channel.
-- **Host:** CI publishes to a separate **public** repository
-  (`H3atman/openpiso-releases`) that holds only Releases: the Admin NSIS installer,
+- **Host (amended 2026-10-14):** CI publishes Releases in the **public source**
+  repository (`H3atman/openpiso`), using the built-in `GITHUB_TOKEN` with
+  job-scoped Contents write permission: the Admin NSIS installer,
   its minisign `.sig`, a per-release Tauri `latest.json`, and a `release.json`
   carrying `version`, `schema_version`, `notes`, and `pub_date`. Source is
   published under PolyForm Shield 1.0.0 (ADR-0087). The same release also
@@ -37,7 +38,9 @@ Source publication is now governed by ADR-0087.
   the shop is sent.
 - **Compatible Rollback:** only older stable releases whose `schema_version`
   equals the database's are offered. Crossing a schema boundary backwards
-  stays a Pre-Migration Backup restore (ADR-0085).
+  stays a Pre-Migration Backup restore (ADR-0085). The new feed starts at the
+  bridge release; versions published only in the legacy repository are no
+  longer offered, even when their Schema Version matches.
 - **Gates:** an App Update that raises the Schema Version requires an explicit
   "no rollback below this version" acknowledgement. A Compatible Rollback
   requires typing the target version. Running sessions produce a warning
@@ -73,5 +76,11 @@ Source publication is now governed by ADR-0087.
   stays supported.
 - Every release must record its Schema Version, so CI derives it from the
   migration table.
-- Once the first updater-enabled release ships, the signing key and the
-  releases repository name cannot change without stranding installs.
+- The signing key stays unchanged. A feed change requires a bridge: installs
+  ≤0.12.0 hardcode `H3atman/openpiso-releases` and validate its asset URL prefix.
+  Publish the first source-repo release to both repositories, regenerating the
+  legacy `latest.json` with immutable legacy-repo download URLs. That signed
+  installer switches the Admin to the source feed. After verifying a 0.12.0
+  Admin can update, remove the optional mirror step and its PAT secret, then
+  archive (never delete) the legacy repository so old downloads still work.
+  See [Bridge release](../releasing.md#bridge-release).

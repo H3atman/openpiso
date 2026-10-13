@@ -200,7 +200,7 @@ hardening guarantee.
 ### Client Guard installation (elevation requirement)
 
 Download `OpenPiso Client_X.Y.Z_x64-setup.exe` from the
-[latest release](https://github.com/H3atman/openpiso-releases/releases/latest),
+[latest release](https://github.com/H3atman/openpiso/releases/latest),
 transfer it to each customer PC, and install manually. Client and Guard are not
 auto-updated by Admin.
 
@@ -650,7 +650,7 @@ installers with `currentUser` (no UAC), keeping the existing install path and
 HKCU Autostart registration. The installer runs in `passive` mode: the kiosk
 hides, a progress window appears, and Admin closes and relaunches automatically.
 
-Download [Admin and Client installers](https://github.com/H3atman/openpiso-releases/releases/latest)
+Download [Admin and Client installers](https://github.com/H3atman/openpiso/releases/latest)
 from the public release. Client remains manual-install only and includes the
 Guard service (`perMachine`, UAC required); it is never installed by Admin App Update.
 
