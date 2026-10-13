@@ -1,0 +1,33 @@
+@import "@openpiso/ui/theme.css";
+
+/* Kiosk-only fullscreen rules: the Central Terminal fills the window
+   and never scrolls. The dark hex background and radial gradient are
+   gone — the kiosk is light now and tokens come from the shared theme. */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* PROTOTYPE — brief shake when the typed PC number is auto-deleted
+   because the customer pressed Enter on an unavailable PC. The shake
+   is the visual feedback for the auto-delete; the transient toast
+   still carries the reason ("PC 99 is offline", etc.). */
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-6px);
+  }
+  40% {
+    transform: translateX(6px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(4px);
+  }
+}

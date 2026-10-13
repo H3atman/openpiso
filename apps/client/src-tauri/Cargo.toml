@@ -1,0 +1,58 @@
+[package]
+name = "openpiso-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "openpiso_client_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+openpiso-core = { path = "../../../crates/openpiso-core" }
+argon2.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+get_if_addrs.workspace = true
+mac_address.workspace = true
+tauri-plugin-autostart = "2.5.1"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# The process harness (tests/handoff_harness.rs) spins up an isolated test
+# Admin with the same stack as the real one; never linked into the Client.
+axum.workspace = true
+# Real Admin router fixture for the Attendance golden-path test.
+openpiso-admin = { path = "../../admin/src-tauri", features = ["test-harness"] }
+
+# The harness builds denied coordination objects through SDDL; production
+# code never compiles this feature.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.61", features = ["Win32_Security_Authorization"] }
+
+# Release-Windows Client UI adapters: the ADR-0028 low-level keyboard hook and
+# ADR-0029 native startup placeholder. Both no-op in debug builds.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_Security",
+  "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_System_Threading",
+] }

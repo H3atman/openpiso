@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal kiosk capability for the Central Terminal window (M3). Grants only the core defaults needed for IPC, events, and window lifecycle; no shell, process, or broad filesystem access. The autostart plugin (tauri-plugin-autostart) is registered as a Rust backend dependency (ADR-0055); it is called programmatically from the admin crate, never from the frontend, so no additional frontend permission is required. The updater plugin (tauri-plugin-updater, ADR-0086) is likewise Rust-only behind authenticated Owner HTTP routes; no updater, shell, or process frontend permissions are granted.",
+  "windows": ["kiosk"],
+  "permissions": ["core:default", "core:event:default", "core:window:default"]
+}

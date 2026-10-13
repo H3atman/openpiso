@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability for the OpenPiso client window. The explicit core:window:* permissions below are exactly what the §4.1 window-mode commands (plan phase 5 / ADR-0029) need: re-sizing + re-positioning the single main window into Lock / Widget / Mini, the decorations / always-on-top / fullscreen toggles (incl. the is-fullscreen read the Lock's idempotent focus-loss re-assertion uses, ADR-0027 §1) plus the unmaximize the Widget / Mini use to drop any leftover Lock state, the show / hide / focus / center primitives, the monitor work-area read that anchors the Mini Bar's top-center, and the start-dragging permission the undecorated Widget / Mini use as a drag region. Launch at startup is intentionally controlled by a Rust command using the Tauri autostart plugin; no autostart plugin commands are exposed to the webview, and no shell, fs, or process permission is added; the release-Windows Rust-only sign-out registry adapter is not webview-accessible.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-decorations",
+    "core:window:allow-set-resizable",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-unmaximize",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-center",
+    "core:window:allow-start-dragging",
+    "core:window:allow-current-monitor",
+    "core:window:allow-primary-monitor"
+  ]
+}

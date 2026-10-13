@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenPiso Client",
+  "version": "0.12.0",
+  "identifier": "org.openpiso.client",
+  "build": {
+    "beforeDevCommand": "bun run dev:frontend",
+    "beforeBuildCommand": "bun run build:guard && bun run build:frontend",
+    "devUrl": "http://localhost:1421",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OpenPiso Client",
+        "decorations": false,
+        "fullscreen": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "transparent": false,
+        "visible": false,
+        "backgroundColor": "#0a0a0a",
+        "generalAutofillEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "licenseFile": "../../../LICENSE",
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../../target/release/client-guard.exe": "resources/client-guard.exe"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "./windows/installer-hooks.nsh"
+      }
+    }
+  }
+}

@@ -1,0 +1,105 @@
+name: Publish Windows Installers
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+# Serialize publication so the Schema Version baseline and latest stay ordered.
+concurrency:
+  group: admin-stable-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'H3atman/openpiso'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_REPOSITORY: H3atman/openpiso-releases
+      RELEASE_TAG: ${{ github.ref_name }}
+      BUNDLE_DIR: target/x86_64-pc-windows-msvc/release/bundle/nsis
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Validate reviewed release source and signing setup
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.OPENPISO_RELEASES_TOKEN }}
+        run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "Missing signing key"; exit 1; }
+          test -n "$GH_TOKEN" || { echo "Missing releases repository token"; exit 1; }
+          bun run scripts/prepare-release.ts validate "$RELEASE_TAG"
+          mkdir -p release/previous
+          gh api --paginate --slurp "repos/$RELEASE_REPOSITORY/releases" > release/releases.json
+          previous_tag=$(bun run scripts/prepare-release.ts previous "$RELEASE_TAG" release/releases.json)
+          if [ -n "$previous_tag" ]; then
+            gh release download "$previous_tag" --repo "$RELEASE_REPOSITORY" --pattern release.json --dir release/previous
+            echo "PREVIOUS_METADATA=release/previous/release.json" >> "$GITHUB_ENV"
+          else
+            echo "PREVIOUS_METADATA=-" >> "$GITHUB_ENV"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test release helper
+        run: bun test scripts/prepare-release.test.ts
+
+      - name: Build bundled web admin
+        run: bun run build:web-admin
+
+      # No release inputs: tauri-action builds/signs only, never publishes to source.
+      - name: Build signed Admin NSIS installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/admin
+          # Default is `npm run tauri`; Admin has no `tauri` script, so run the CLI bin via Bun.
+          tauriScript: bun tauri
+          args: --target x86_64-pc-windows-msvc --bundles nsis
+
+      # Client is manual-install only: no updater artifacts or signing environment.
+      - name: Build Client NSIS installer with Guard service
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/client
+          tauriScript: bun tauri
+          args: --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Compose release notes and per-release manifests
+        run: bun run scripts/prepare-release.ts prepare "$RELEASE_TAG" "$PREVIOUS_METADATA" "$BUNDLE_DIR" release/publish
+
+      # Keep partial uploads invisible to the Admin Release Feed.
+      - name: Publish complete stable release to public repository
+        env:
+          GH_TOKEN: ${{ secrets.OPENPISO_RELEASES_TOKEN }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json isDraft > release/existing.json; then
+            test "$(bun -e 'console.log((await Bun.file("release/existing.json").json()).isDraft)')" = true || { echo "Release already published; do not overwrite signed releases"; exit 1; }
+          else
+            gh release create "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --draft --title "OpenPiso $RELEASE_TAG" --notes-file release/publish/release-body.md
+          fi
+          version="${RELEASE_TAG#v}"
+          installer="$BUNDLE_DIR/OpenPiso Central Terminal_${version}_x64-setup.exe"
+          client_installer="$BUNDLE_DIR/OpenPiso Client_${version}_x64-setup.exe"
+          gh release upload "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --clobber "$installer" "$installer.sig" "$client_installer" release/publish/latest.json release/publish/release.json
+          gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --title "OpenPiso $RELEASE_TAG" --notes-file release/publish/release-body.md --prerelease=false --draft=false --latest

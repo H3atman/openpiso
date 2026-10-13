@@ -1,0 +1,3 @@
+[test]
+# Web Admin tests require Vitest's Vite transforms and jsdom environment.
+pathIgnorePatterns = ["apps/web-admin/**/*.test.ts"]

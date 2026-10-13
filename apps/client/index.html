@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenPiso Client</title>
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!--
+      Webview-side boot splash. The native Win32 placeholder covers WebView2's
+      cold creation path in installed release builds. This inlined layer covers
+      the remaining HTML and bundle parse before the Svelte Lock paints, so the
+      handoff never reveals an unstyled white page. `main.ts` removes it as soon
+      as the Svelte app mounts.
+    -->
+    <style>
+      #boot {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        background: #0a0a0a;
+        color: #fafafa;
+        font-family:
+          ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial,
+          sans-serif;
+      }
+      #boot .boot-mark {
+        height: clamp(2.5rem, 8vw, 4.5rem);
+        width: auto;
+      }
+      #boot .boot-note {
+        font-size: 0.875rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #6f6f6f;
+      }
+    </style>
+  </head>
+  <body style="margin: 0; background: #0a0a0a">
+    <div id="boot" aria-hidden="true">
+      <img class="boot-mark" src="/openpiso-horizontal-reversed.svg" alt="OpenPiso" />
+      <div class="boot-note">Starting…</div>
+    </div>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

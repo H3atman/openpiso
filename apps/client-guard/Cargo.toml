@@ -1,0 +1,22 @@
+[package]
+name = "client-guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# The Client Guard is a Windows SYSTEM service with no Tauri dependency
+# (ADR-0048). It uses raw Win32 FFI for all OS operations.
+#
+# ADR-0077 adds one outbound poll to Admin. It brings serde and serde_json for
+# the cached endpoint file and the JSON body — no HTTP or TLS stack: the
+# request is a hand-written HTTP/1.1 POST over `TcpStream` to a plain-HTTP LAN
+# address, which is a far smaller thing to add to a SYSTEM service.
+
+[dependencies]
+openpiso-core = { path = "../../crates/openpiso-core" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

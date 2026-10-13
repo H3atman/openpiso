@@ -1,0 +1,8 @@
+Wordmark letterforms: Noto Sans Bold, version 2.015, outlined to paths.
+Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)
+License: SIL Open Font License 1.1 (OFL.txt in this folder; https://scripts.sil.org/OFL).
+Source of the license statement: name table of the installed file /usr/share/fonts/noto/NotoSans-Bold.ttf
+(name IDs 0, 13, 14), packaged by Arch noto-fonts 2026.10.01.
+Modifications: letters outlined and spaced optically; the dot of the i replaced by a rounded square.
+The outlined logo files do not need the font installed. Using Noto Sans for other text needs no extra license under the OFL.
+Not legal advice. The OFL permits use, modification and embedding in logos; the font itself must not be sold on its own.

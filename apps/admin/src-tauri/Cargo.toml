@@ -1,0 +1,72 @@
+[package]
+name = "openpiso-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "openpiso_admin_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# Test-only: exposes `attendance_harness` for Client tests; never default/release.
+[features]
+test-harness = []
+
+[dependencies]
+argon2.workspace = true
+# Transitional: only for verifying legacy bcrypt credentials at login.
+# See auth.rs – all new hashes are Argon2.
+bcrypt.workspace = true
+axum.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+libsqlite3-sys = "0.30"
+openpiso-core = { path = "../../../crates/openpiso-core" }
+rand.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver = "1"
+serialport = "4.8"
+sqlx.workspace = true
+tauri.workspace = true
+# Single-instance guard prevents a second admin process from holding a
+# separate SQLite pool and running a duplicate timer loop when the
+# Central Terminal is launched while already running (GitHub #204).
+tauri-plugin-single-instance = "2"
+# Autostart persistence at Windows logon via the per-user Run key
+# (ADR-0055, GitHub #205). Registered as a Tauri plugin for the Rust
+# backend to read/write — never invoked from the frontend.
+tauri-plugin-autostart = "2"
+# Rust-only signed NSIS updater (ADR-0086); no frontend permissions.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
+auto-launch = "0.5"
+thiserror.workspace = true
+tempfile = "3"
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+# PC Monitoring Host Reachability (ADR-0076, GitHub #340): direct ICMP echo
+# through the Windows IP Helper API. No ping/PowerShell/shell/sidecar process
+# is ever started; non-Windows builds get an explicit unsupported adapter.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Security_Cryptography",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+bytes = "1"
+http-body-util = "0.1"
+reqwest.workspace = true

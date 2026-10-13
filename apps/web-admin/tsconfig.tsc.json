@@ -1,0 +1,6 @@
+{
+  "//": "Plain `tsc --noEmit` pass for standalone .ts files. svelte-check owns all .svelte type-checking. Vendored shadcn-svelte ui barrels re-export types from .svelte modules, which plain tsc cannot resolve, so they are excluded here (svelte-check still covers them).",
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "vite.config.ts"],
+  "exclude": ["src/lib/components/ui/**"]
+}

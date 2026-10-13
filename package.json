@@ -1,0 +1,31 @@
+{
+  "name": "openpiso",
+  "private": true,
+  "license": "PolyForm-Shield-1.0.0",
+  "version": "0.12.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:admin": "bun run build:web-admin && bun --filter @openpiso/admin dev",
+    "dev:admin:fast": "bun --filter @openpiso/admin dev",
+    "dev:client": "bun --filter @openpiso/client dev",
+    "dev:web-admin": "bun --filter @openpiso/web-admin dev",
+    "build:admin": "bun run build:web-admin && bun --filter @openpiso/admin build",
+    "build:client": "bun --filter @openpiso/client build",
+    "build:web-admin": "bun --filter @openpiso/web-admin build",
+    "build:installers": "bun run scripts/build-installers.ts",
+    "version:patch": "bun run scripts/bump-version.ts patch",
+    "version:minor": "bun run scripts/bump-version.ts minor",
+    "version:major": "bun run scripts/bump-version.ts major",
+    "check": "bun --filter '*' check",
+    "check:windows": "bun run scripts/check-windows.ts",
+    "format": "bun --filter '*' format"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3"
+  }
+}
