@@ -8775,6 +8775,21 @@ mod tests {
         assert!(gone.is_none());
     }
 
+    // Stable targets on either side of the running binary, independent of version bumps.
+    fn update_fixture_versions() -> (String, String) {
+        let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("current version");
+        let mut older = semver::Version::new(current.major, current.minor, current.patch);
+        if older.patch > 0 {
+            older.patch -= 1;
+        } else if older.minor > 0 {
+            older.minor -= 1;
+        } else {
+            older.major = older.major.checked_sub(1).expect("version above 0.0.0");
+        }
+        let newer = semver::Version::new(current.major, current.minor, current.patch + 1);
+        (older.to_string(), newer.to_string())
+    }
+
     fn update_release(version: &str, schema_version: i64) -> crate::app_update::Release {
         crate::app_update::Release {
             version: version.to_owned(),
@@ -8996,7 +9011,8 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_prepare_failures_are_retained_in_host_diagnostics() {
-        for (action, version) in [("install", "0.12.0"), ("rollback", "0.11.4")] {
+        let (older, newer) = update_fixture_versions();
+        for (action, version) in [("install", newer.as_str()), ("rollback", older.as_str())] {
             let dir = tempfile::tempdir().expect("data directory");
             let mut state = test_state_in(dir.path()).await;
             state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
@@ -9067,10 +9083,11 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_install_failures_do_not_strand_the_owner() {
+        let (_, newer) = update_fixture_versions();
         for fail_prepare in [true, false] {
             let mut state = test_state().await;
             state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-                std::sync::Mutex::new(Ok(vec![update_release("0.12.0", 58)])),
+                std::sync::Mutex::new(Ok(vec![update_release(&newer, 58)])),
             ));
             state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
                 fail_prepare,
@@ -9091,7 +9108,7 @@ mod tests {
             let response = client
                 .post(format!("http://{address}/web-admin/update/install"))
                 .owner(&auth)
-                .json(&serde_json::json!({ "version": "0.12.0" }))
+                .json(&serde_json::json!({ "version": newer }))
                 .send()
                 .await
                 .expect("failed install");
@@ -9118,7 +9135,7 @@ mod tests {
             } else {
                 assert_eq!(
                     body["lastResult"],
-                    serde_json::json!({ "from": env!("CARGO_PKG_VERSION"), "to": "0.12.0", "ok": false })
+                    serde_json::json!({ "from": env!("CARGO_PKG_VERSION"), "to": newer, "ok": false })
                 );
                 let cleared = client
                     .post(format!("http://{address}/web-admin/update/ack"))
@@ -9136,6 +9153,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_download_progress_blocks_duplicate_install_and_premature_ack() {
+        let (_, newer) = update_fixture_versions();
         let mut state = test_state().await;
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
@@ -9143,7 +9161,7 @@ mod tests {
             ..Default::default()
         });
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-            std::sync::Mutex::new(Ok(vec![update_release("0.12.0", 58)])),
+            std::sync::Mutex::new(Ok(vec![update_release(&newer, 58)])),
         ));
         let address = spawn(state.clone()).await;
         let client = reqwest::Client::new();
@@ -9159,7 +9177,7 @@ mod tests {
         let request = client
             .post(format!("http://{address}/web-admin/update/install"))
             .owner(&auth)
-            .json(&serde_json::json!({ "version": "0.12.0" }));
+            .json(&serde_json::json!({ "version": newer }));
         let install = tokio::spawn(async move { request.send().await.expect("install") });
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -9175,7 +9193,7 @@ mod tests {
                 if body.get("download").is_some() {
                     assert_eq!(
                         body["download"],
-                        serde_json::json!({ "targetVersion": "0.12.0", "percent": 25 })
+                        serde_json::json!({ "targetVersion": newer, "percent": 25 })
                     );
                     break;
                 }
@@ -9187,7 +9205,7 @@ mod tests {
         let duplicate = client
             .post(format!("http://{address}/web-admin/update/install"))
             .owner(&auth)
-            .json(&serde_json::json!({ "version": "0.12.0" }))
+            .json(&serde_json::json!({ "version": newer }))
             .send()
             .await
             .expect("duplicate");
@@ -9218,6 +9236,16 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_check_offers_newest_stable_and_only_compatible_rollbacks() {
+        let (older, newer) = update_fixture_versions();
+        let mut newest = semver::Version::parse(&newer).expect("newer version");
+        newest.patch += 1;
+        let preview = format!(
+            "{}.{}.{}-beta.1",
+            newest.major,
+            newest.minor,
+            newest.patch + 1
+        );
+        let newest = newest.to_string();
         let mut state = test_state().await;
         let release = |version: &str, schema_version| crate::app_update::Release {
             version: version.to_owned(),
@@ -9231,14 +9259,14 @@ mod tests {
         };
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                release("0.12.0", 58),
-                release("0.9.0", 58),
-                release("0.11.3", 57),
-                release("0.13.0", 59),
-                release("0.11.4", 58),
-                release("0.11.2", 59),
-                release("0.14.0-beta.1", 58),
-                release("0.11.5", 58),
+                release(&newer, 58),
+                release("0.0.0", 58),
+                release(&older, 57),
+                release(&newest, 59),
+                release(&older, 58),
+                release(&older, 59),
+                release(&preview, 58),
+                release(env!("CARGO_PKG_VERSION"), 58),
             ])),
         ));
         let address = spawn(state).await;
@@ -9252,9 +9280,9 @@ mod tests {
             .expect("check");
         assert_eq!(response.status(), StatusCode::OK);
         let body: serde_json::Value = response.json().await.expect("check JSON");
-        assert_eq!(body["available"]["version"], "0.13.0");
+        assert_eq!(body["available"]["version"], newest);
         assert_eq!(body["available"]["raisesSchema"], true);
-        assert_eq!(body["available"]["notes"], "Notes for 0.13.0");
+        assert_eq!(body["available"]["notes"], format!("Notes for {newest}"));
         assert_eq!(body["available"]["schemaVersion"], 59);
         assert!(body["lastCheckedAt"].is_string());
         let versions: Vec<_> = body["rollbacks"]
@@ -9263,7 +9291,7 @@ mod tests {
             .iter()
             .map(|release| release["version"].as_str().expect("version"))
             .collect();
-        assert_eq!(versions, ["0.11.4", "0.9.0"]);
+        assert_eq!(versions, [older.as_str(), "0.0.0"]);
         let state: serde_json::Value = client
             .get(format!("http://{address}/web-admin/update"))
             .owner(&auth)
@@ -9566,6 +9594,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_feed_errors_are_state_and_successful_recheck_clears_them() {
+        let (_, newer) = update_fixture_versions();
         let mut state = test_state().await;
         let pool = state.pool.clone();
         let feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
@@ -9593,16 +9622,7 @@ mod tests {
             .await
             .expect("JSON");
         assert_eq!(stored, failed);
-        *feed.0.lock().expect("feed") = Ok(vec![crate::app_update::Release {
-            version: "0.12.0".to_owned(),
-            schema_version: 58,
-            notes: String::new(),
-            pub_date: "2026-10-13T00:00:00Z".parse().expect("date"),
-            latest_json_url: format!(
-                "https://github.com/{RELEASE_REPOSITORY}/releases/download/v0.12.0/latest.json"
-            ),
-            raises_schema: false,
-        }]);
+        *feed.0.lock().expect("feed") = Ok(vec![update_release(&newer, 58)]);
         let successful: serde_json::Value = client
             .post(&url)
             .owner(&auth)
@@ -9613,7 +9633,7 @@ mod tests {
             .await
             .expect("JSON");
         assert!(successful.get("lastError").is_none());
-        assert_eq!(successful["available"]["version"], "0.12.0");
+        assert_eq!(successful["available"]["version"], newer);
         *feed.0.lock().expect("feed") = Err("feed offline again".to_owned());
         let failed_again: serde_json::Value = client
             .post(&url)
@@ -9690,6 +9710,8 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_uses_applied_schema_max_and_semver_precedence() {
+        let (older, newer) = update_fixture_versions();
+        let current_build = format!("{}+build.2", env!("CARGO_PKG_VERSION"));
         let mut state = test_state().await;
         // Deliberately differ from the binary's migration constant: the route
         // must read the applied database history, not the build's known maximum.
@@ -9709,10 +9731,10 @@ mod tests {
         };
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                release("0.12.0", 59),
-                release("0.11.4", 59),
-                release("0.11.3", 58),
-                release("0.11.5+build.2", 59),
+                release(&newer, 59),
+                release(&older, 59),
+                release(&older, 58),
+                release(&current_build, 59),
             ])),
         ));
         let address = spawn(state).await;
@@ -9728,11 +9750,11 @@ mod tests {
             .await
             .expect("JSON");
         assert_eq!(body["currentSchemaVersion"], 59);
-        assert_eq!(body["available"]["version"], "0.12.0");
+        assert_eq!(body["available"]["version"], newer);
         assert_eq!(body["available"]["raisesSchema"], false);
         let rollbacks = body["rollbacks"].as_array().expect("rollbacks");
         assert_eq!(rollbacks.len(), 1);
-        assert_eq!(rollbacks[0]["version"], "0.11.4");
+        assert_eq!(rollbacks[0]["version"], older);
         assert_eq!(rollbacks[0]["raisesSchema"], false);
     }
 
