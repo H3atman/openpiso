@@ -23,8 +23,6 @@ jobs:
         shell: bash
     env:
       RELEASE_REPOSITORY: ${{ github.repository }}
-      # legacy feed for installs ≤0.12.0; delete this step and the secret after the bridge release
-      LEGACY_RELEASE_REPOSITORY: H3atman/openpiso-releases
       RELEASE_TAG: ${{ github.ref_name }}
       BUNDLE_DIR: target/x86_64-pc-windows-msvc/release/bundle/nsis
     steps:
@@ -111,21 +109,3 @@ jobs:
           client_installer="$BUNDLE_DIR/OpenPiso Client_${version}_x64-setup.exe"
           gh release upload "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --clobber "$installer" "$installer.sig" "$client_installer" release/publish/latest.json release/publish/release.json
           gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --title "OpenPiso $RELEASE_TAG" --notes-file release/publish/release-body.md --prerelease=false --draft=false --latest
-
-      - name: Mirror bridge release to legacy feed (optional)
-        env:
-          GH_TOKEN: ${{ secrets.OPENPISO_RELEASES_TOKEN }}
-        run: |
-          # Missing secret means source-only publication.
-          test -n "$GH_TOKEN" || exit 0
-          bun run scripts/prepare-release.ts prepare "$RELEASE_TAG" "$PREVIOUS_METADATA" "$BUNDLE_DIR" release/legacy --repository "$LEGACY_RELEASE_REPOSITORY"
-          if gh release view "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --json isDraft > release/legacy-existing.json; then
-            test "$(bun -e 'console.log((await Bun.file("release/legacy-existing.json").json()).isDraft)')" = true || { echo "Legacy release already published; do not overwrite signed releases"; exit 1; }
-          else
-            gh release create "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --draft --title "OpenPiso $RELEASE_TAG" --notes-file release/legacy/release-body.md
-          fi
-          version="${RELEASE_TAG#v}"
-          installer="$BUNDLE_DIR/OpenPiso Central Terminal_${version}_x64-setup.exe"
-          client_installer="$BUNDLE_DIR/OpenPiso Client_${version}_x64-setup.exe"
-          gh release upload "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --clobber "$installer" "$installer.sig" "$client_installer" release/legacy/latest.json release/legacy/release.json
-          gh release edit "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --title "OpenPiso $RELEASE_TAG" --notes-file release/legacy/release-body.md --prerelease=false --draft=false --latest

@@ -1,6 +1,6 @@
 # ADR-0086: Owner-initiated Admin App Update from public signed GitHub releases
 
-- Status: Proposed; source-privacy decision superseded by [ADR-0087](0087-source-available-license.md)
+- Status: Accepted; source-privacy decision superseded by [ADR-0087](0087-source-available-license.md)
 - Date: 2026-10-13
 - Deciders: shop owner (product)
 - Relates to: [ADR-0083](0083-install-telemetry.md) (the other sanctioned
@@ -83,4 +83,4 @@ Source publication is now governed by ADR-0087.
   installer switches the Admin to the source feed. After verifying a 0.12.0
   Admin can update, remove the optional mirror step and its PAT secret, then
   archive (never delete) the legacy repository so old downloads still work.
-  See [Bridge release](../releasing.md#bridge-release).
+  See [Bridge release](../releasing.md#bridge-release-v0121).
