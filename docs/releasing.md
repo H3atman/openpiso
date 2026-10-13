@@ -36,11 +36,12 @@ source); installed Admins read public releases anonymously.
 4. In the **source repository**, Settings → Secrets and variables →
    Actions, configure these repository secrets:
 
-   | Secret                               | Value                                            |
-   | ------------------------------------ | ------------------------------------------------ |
-   | `TAURI_SIGNING_PRIVATE_KEY`          | Complete private key file contents, not its path |
-   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password used when generating the key            |
-   | `OPENPISO_RELEASES_TOKEN`            | Legacy-repo PAT; bridge release only              |
+   | Secret                               | Value                                                     |
+   | ------------------------------------ | --------------------------------------------------------- |
+   | `TAURI_SIGNING_PRIVATE_KEY`          | Complete private key file contents, not its path          |
+   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password used when generating the key                     |
+   | `OPENPISO_RELEASES_TOKEN`            | Legacy-repo PAT; bridge release only                      |
+   | `OPENPISO_POSTHOG_TOKEN`             | PostHog project token; compiled into the Admin (ADR-0083) |
 
    Enter secrets through GitHub's private form or an interactive secret-management
    tool, never command-line literals, committed files, logs or chat. An intentionally

@@ -39,9 +39,12 @@ jobs:
       - name: Validate reviewed release source and signing setup
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          OPENPISO_POSTHOG_TOKEN: ${{ secrets.OPENPISO_POSTHOG_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "Missing signing key"; exit 1; }
+          # Releases always carry Telemetry (ADR-0083); never publish an inert build by accident.
+          test -n "$OPENPISO_POSTHOG_TOKEN" || { echo "Missing Telemetry token"; exit 1; }
           bun run scripts/prepare-release.ts validate "$RELEASE_TAG"
           mkdir -p release/previous
           gh api --paginate --slurp "repos/$RELEASE_REPOSITORY/releases" > release/releases.json
@@ -74,6 +77,8 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Compiled into the Admin at build time (option_env!); Client has no Telemetry.
+          OPENPISO_POSTHOG_TOKEN: ${{ secrets.OPENPISO_POSTHOG_TOKEN }}
         with:
           projectPath: apps/admin
           # Default is `npm run tauri`; Admin has no `tauri` script, so run the CLI bin via Bun.
