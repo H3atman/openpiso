@@ -7,7 +7,7 @@ time, sessions, and SQLite; shop operation does not require cloud services.
 - **Web admin** — owner dashboard served by Admin (`:8080/admin`).
 - **Client** — per-PC timer, heartbeat, lock screen; Windows Client Guard service.
 
-[Download Windows installers](https://github.com/H3atman/openpiso-releases/releases/latest).
+[Download Windows installers](https://github.com/H3atman/openpiso/releases/latest).
 Admin supports signed, owner-initiated updates; Client installation is manual.
 
 ## License

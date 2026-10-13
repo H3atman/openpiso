@@ -20,8 +20,10 @@ Noncompete terms, including selling/reselling OpenPiso as a competing substitute
 The full license controls, including its stated exceptions; this summary adds
 no restrictions. Contributions are accepted under the same project license.
 
-Retain the separate public releases repository and signed Admin updater feed.
-Publishing source does not change update authority, signing, or LAN boundaries.
+Publish Releases and the signed Admin updater feed in the public source
+repository. ADR-0086's amended bridge plan moves existing installs from the
+legacy feed without changing the signing key. Publishing source does not
+change update authority, signing, or LAN boundaries.
 Third-party code and fonts retain their licenses, documented in
 `THIRD-PARTY-NOTICES.md`. Both NSIS installers display the project license.
 

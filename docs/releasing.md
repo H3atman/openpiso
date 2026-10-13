@@ -8,11 +8,12 @@ source); installed Admins read public releases anonymously.
 
 ## One-time maintainer setup
 
-1. Create **`H3atman/openpiso-releases`**, public, with no source or shop data.
-   Initialize it with a minimal README/default-branch commit so GitHub can create
-   release tags there (these are not source tags). Keep its Releases and assets public. The repository name and signing key are
-   effectively permanent after the first updater-enabled release: changing either
-   strands installed Admins.
+1. Publish Releases in **`H3atman/openpiso`**, the public source repository.
+   The tag-triggered workflow uses the built-in `GITHUB_TOKEN`, with
+   `permissions: contents: write` only on the release job. No publishing PAT
+   is needed for normal releases. Keep Releases and assets public and preserve
+   the updater signing key across releases. Existing installs need the
+   [Bridge release](#bridge-release) below to change feeds.
 2. Generate a Tauri updater minisign keypair from a trusted checkout:
 
    ```bash
@@ -27,31 +28,31 @@ source); installed Admins read public releases anonymously.
    and commit that public configuration before tagging. Never generate a new key
    for each release. CI validates key configuration; it does not provision keys.
 
-3. In GitHub settings, create a **fine-grained personal access token**, resource
-   owner `H3atman`, selected repository **only** `openpiso-releases`, repository
-   permission **Contents: Read and write** (Metadata read is implicit). Give it an
-   expiry, record the renewal date, and obtain any required owner approval.
-   Do not grant access to the source repo or put this token in the app.
+3. For the bridge release only, keep `OPENPISO_RELEASES_TOKEN`: a fine-grained
+   PAT owned by `H3atman`, selected repository **only** `openpiso-releases`,
+   permission **Contents: Read and write** (Metadata read is implicit). It
+   enables the optional legacy mirror; an unset secret skips that step. No PAT
+   access to the source repository is needed.
 4. In the **source repository**, Settings → Secrets and variables →
-   Actions, create these repository secrets:
+   Actions, configure these repository secrets:
 
    | Secret                               | Value                                            |
    | ------------------------------------ | ------------------------------------------------ |
-   | `OPENPISO_RELEASES_TOKEN`            | Fine-grained PAT above                           |
    | `TAURI_SIGNING_PRIVATE_KEY`          | Complete private key file contents, not its path |
    | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password used when generating the key            |
+   | `OPENPISO_RELEASES_TOKEN`            | Legacy-repo PAT; bridge release only              |
 
    Enter secrets through GitHub's private form or an interactive secret-management
    tool, never command-line literals, committed files, logs or chat. An intentionally
    passwordless key uses an empty password, but a protected key is recommended.
-   `GITHUB_TOKEN` only reads the source checkout; it cannot publish across repos.
+   `GITHUB_TOKEN` is provided automatically; it cannot publish across repositories.
 
 5. Back up the private key **and password** offline, separately from CI and the
    checkout. Keep the public key and key identifier with the backup. Verify recovery
    by signing a disposable installer with the backed-up key and checking it against
    the committed public key. Losing this key prevents updates to existing installs;
    compromise permits malicious installers. Restrict tag pushes and workflow edits
-   to trusted maintainers; rotate an expired PAT, not the signing identity.
+   to trusted maintainers; renew the bridge PAT if needed, not the signing identity.
 
 Minisign is updater authenticity, **not Windows Authenticode**. SmartScreen may
 still warn on sideloaded EXEs. Authenticode is outside this release process.
@@ -95,9 +96,13 @@ CI:
 6. Composes the body from the committed notes. When schema rose, adds a deterministic
    database-change / no cross-schema rollback warning. Schema regression is refused.
    The same final notes appear in the body and both manifests.
-7. Creates a **draft** in the public repo, uploads all five assets, then publishes
+7. Creates a **draft** in the source repo with `--verify-tag` (the trigger tag
+   must already exist), uploads all five assets, then publishes
    as stable and marks latest. Drafts stay invisible to installed Admins. Publication
    is serialized across tags; a published release is never overwritten by a rerun.
+8. If `OPENPISO_RELEASES_TOKEN` is non-empty, regenerates manifests in a separate
+   output directory with `--repository "$LEGACY_RELEASE_REPOSITORY"`, then
+   publishes the same signed installers and legacy manifests to the legacy feed.
 
 Each `vX.Y.Z` release contains:
 
@@ -120,7 +125,8 @@ on its **draft**, then publish the complete release. Never delete/recreate a
 published version or mutate its installer/manifests. Fix a published mistake with
 a new version. An older legacy release without `release.json` must be deliberately
 bootstrapped with accurate schema metadata before using it as a baseline; do not
-invent a Schema Version to get CI green.
+invent a Schema Version to get CI green. The source feed uses only source-repo
+releases as its baseline, not legacy releases.
 
 Focused helper verification:
 
@@ -129,6 +135,36 @@ bun test scripts/prepare-release.test.ts
 # If installed:
 actionlint .github/workflows/release.yml
 ```
+
+## Bridge release
+
+Admins ≤0.12.0 read `H3atman/openpiso-releases` and accept installer URLs only
+under that repository's `/releases/download/` prefix. The first release from
+this branch must bridge them to `H3atman/openpiso`; simply redirecting the old
+manifest to source-repo assets would be rejected.
+
+1. Bump to the next version and review its release notes through the normal
+   release flow. Do not replace the updater signing key.
+2. Keep `OPENPISO_RELEASES_TOKEN` set for **that one release**. CI publishes to
+   the source repository with `GITHUB_TOKEN`, then mirrors the Admin installer,
+   `.sig`, Client installer, `latest.json`, and `release.json` to the legacy
+   repository. The second `prepare-release` invocation writes `release/legacy`
+   using `--repository H3atman/openpiso-releases`; each manifest retains immutable
+   `/releases/download/vX.Y.Z/...` URLs for its own repository.
+3. Verify anonymously accessible assets in both repositories. On an isolated
+   **0.12.0 Admin**, Check now must offer the bridge version; install it through
+   App Update and verify relaunch, signature validation, and the new source feed.
+   The new feed starts at this bridge release: Compatible Rollback no longer
+   offers versions published only in the legacy repository.
+4. After successful verification, delete `OPENPISO_RELEASES_TOKEN` and remove
+   the optional legacy mirror step and `LEGACY_RELEASE_REPOSITORY` workflow env
+   entry. Archive `openpiso-releases` on GitHub; **do not delete it**, so old
+   download links and installs that have not yet taken the bridge remain usable.
+
+If the mirror fails after source publication, finish the missing legacy draft
+with the same signed artifacts and legacy manifests before retiring the secret.
+Do not overwrite the already published source release; rerunning the entire
+workflow deliberately refuses to overwrite it.
 
 ## Manual release gate (real Windows installation)
 

@@ -2564,7 +2564,7 @@ State uses camelCase:
     "schemaVersion": 59,
     "notes": "Owner-facing Markdown release notes",
     "pubDate": "2026-10-13T00:00:00Z",
-    "latestJsonUrl": "https://github.com/H3atman/openpiso-releases/releases/download/v0.12.0/latest.json",
+    "latestJsonUrl": "https://github.com/H3atman/openpiso/releases/download/v0.12.0/latest.json",
     "raisesSchema": true
   },
   "rollbacks": [],
@@ -2645,7 +2645,7 @@ Install and Compatible Rollback:
   audited. Authentication/CSRF/Origin denials use existing middleware rules.
 
 Production anonymously lists the public GitHub Releases of
-`H3atman/openpiso-releases` and parses each stable release's `release.json`
+`H3atman/openpiso` and parses each stable release's `release.json`
 (`version`, `schema_version`, `notes`, `pub_date`). Its `latest.json` asset URL
 is retained for the later signed install flow. Legacy releases missing either
 artifact are skipped; malformed metadata, HTTP failures and rate limits are
@@ -2654,7 +2654,7 @@ shop data, cookies, credentials or Owner tokens.
 
 For debug fixture harnesses only, `OPENPISO_RELEASE_FEED_BASE_URL` replaces
 `https://api.github.com`; fixtures implement
-`/repos/H3atman/openpiso-releases/releases?per_page=100&page=N` and asset URLs.
+`/repos/H3atman/openpiso/releases?per_page=100&page=N` and asset URLs.
 HTTP is allowed only for loopback fixtures, whose assets must have the same
 origin. Production asset URLs stay under the public releases repository.
 Release builds compile out the environment override entirely.

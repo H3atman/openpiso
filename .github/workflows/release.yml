@@ -15,12 +15,16 @@ concurrency:
 jobs:
   release:
     if: github.repository == 'H3atman/openpiso'
+    permissions:
+      contents: write
     runs-on: windows-latest
     defaults:
       run:
         shell: bash
     env:
-      RELEASE_REPOSITORY: H3atman/openpiso-releases
+      RELEASE_REPOSITORY: ${{ github.repository }}
+      # legacy feed for installs ≤0.12.0; delete this step and the secret after the bridge release
+      LEGACY_RELEASE_REPOSITORY: H3atman/openpiso-releases
       RELEASE_TAG: ${{ github.ref_name }}
       BUNDLE_DIR: target/x86_64-pc-windows-msvc/release/bundle/nsis
     steps:
@@ -35,10 +39,9 @@ jobs:
       - name: Validate reviewed release source and signing setup
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          GH_TOKEN: ${{ secrets.OPENPISO_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "Missing signing key"; exit 1; }
-          test -n "$GH_TOKEN" || { echo "Missing releases repository token"; exit 1; }
           bun run scripts/prepare-release.ts validate "$RELEASE_TAG"
           mkdir -p release/previous
           gh api --paginate --slurp "repos/$RELEASE_REPOSITORY/releases" > release/releases.json
@@ -65,7 +68,7 @@ jobs:
       - name: Build bundled web admin
         run: bun run build:web-admin
 
-      # No release inputs: tauri-action builds/signs only, never publishes to source.
+      # No release inputs: tauri-action builds/signs only; publication is explicit below.
       - name: Build signed Admin NSIS installer
         uses: tauri-apps/tauri-action@v0
         env:
@@ -86,20 +89,38 @@ jobs:
           args: --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: Compose release notes and per-release manifests
-        run: bun run scripts/prepare-release.ts prepare "$RELEASE_TAG" "$PREVIOUS_METADATA" "$BUNDLE_DIR" release/publish
+        run: bun run scripts/prepare-release.ts prepare "$RELEASE_TAG" "$PREVIOUS_METADATA" "$BUNDLE_DIR" release/publish --repository "$RELEASE_REPOSITORY"
 
       # Keep partial uploads invisible to the Admin Release Feed.
-      - name: Publish complete stable release to public repository
+      - name: Publish complete stable release to source repository
         env:
-          GH_TOKEN: ${{ secrets.OPENPISO_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json isDraft > release/existing.json; then
             test "$(bun -e 'console.log((await Bun.file("release/existing.json").json()).isDraft)')" = true || { echo "Release already published; do not overwrite signed releases"; exit 1; }
           else
-            gh release create "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --draft --title "OpenPiso $RELEASE_TAG" --notes-file release/publish/release-body.md
+            gh release create "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --verify-tag --draft --title "OpenPiso $RELEASE_TAG" --notes-file release/publish/release-body.md
           fi
           version="${RELEASE_TAG#v}"
           installer="$BUNDLE_DIR/OpenPiso Central Terminal_${version}_x64-setup.exe"
           client_installer="$BUNDLE_DIR/OpenPiso Client_${version}_x64-setup.exe"
           gh release upload "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --clobber "$installer" "$installer.sig" "$client_installer" release/publish/latest.json release/publish/release.json
           gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --title "OpenPiso $RELEASE_TAG" --notes-file release/publish/release-body.md --prerelease=false --draft=false --latest
+
+      - name: Mirror bridge release to legacy feed (optional)
+        env:
+          GH_TOKEN: ${{ secrets.OPENPISO_RELEASES_TOKEN }}
+        run: |
+          # Missing secret means source-only publication.
+          test -n "$GH_TOKEN" || exit 0
+          bun run scripts/prepare-release.ts prepare "$RELEASE_TAG" "$PREVIOUS_METADATA" "$BUNDLE_DIR" release/legacy --repository "$LEGACY_RELEASE_REPOSITORY"
+          if gh release view "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --json isDraft > release/legacy-existing.json; then
+            test "$(bun -e 'console.log((await Bun.file("release/legacy-existing.json").json()).isDraft)')" = true || { echo "Legacy release already published; do not overwrite signed releases"; exit 1; }
+          else
+            gh release create "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --draft --title "OpenPiso $RELEASE_TAG" --notes-file release/legacy/release-body.md
+          fi
+          version="${RELEASE_TAG#v}"
+          installer="$BUNDLE_DIR/OpenPiso Central Terminal_${version}_x64-setup.exe"
+          client_installer="$BUNDLE_DIR/OpenPiso Client_${version}_x64-setup.exe"
+          gh release upload "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --clobber "$installer" "$installer.sig" "$client_installer" release/legacy/latest.json release/legacy/release.json
+          gh release edit "$RELEASE_TAG" --repo "$LEGACY_RELEASE_REPOSITORY" --title "OpenPiso $RELEASE_TAG" --notes-file release/legacy/release-body.md --prerelease=false --draft=false --latest

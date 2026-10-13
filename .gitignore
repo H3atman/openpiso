@@ -1,0 +1,25 @@
+node_modules/
+dist/
+target/
+target-codex/
+apps/*/src-tauri/gen/
+.DS_Store
+NUL
+tmp/
+
+# Local SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Local build secrets (e.g. OPENPISO_POSTHOG_TOKEN). Never version this.
+.env.local
+CLAUDE.local.md
+
+# Local legacy-account exports may contain private records. Never version these.
+scripts/accounts/
+
+# Local run artifacts (Client dev logs, curl cookie jar)
+/client-out.log
+/client-err.log
+/cookies.txt

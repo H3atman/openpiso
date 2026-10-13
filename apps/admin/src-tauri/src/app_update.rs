@@ -96,7 +96,7 @@ pub trait PreparedInstall: Send {
     fn install(self: Box<Self>) -> BoxFuture<'static, AppResult<()>>;
 }
 
-pub const RELEASE_REPOSITORY: &str = "H3atman/openpiso-releases";
+pub const RELEASE_REPOSITORY: &str = "H3atman/openpiso";
 const GITHUB_API: &str = "https://api.github.com";
 
 pub struct GitHubReleaseFeed {
