@@ -60,14 +60,27 @@ From a clean `main`, after the manual gate below:
 bun run version:patch     # or version:minor / version:major
 ```
 
-The script first fetches `origin/main`, fast-forwards `main` when behind, and refuses any local commits ahead of `origin/main` (push or rebase first).
+This is the single release command. Before touching any version file (also in
+`--dry-run`), it fetches `origin/main`, fast-forwards `main` when behind, refuses
+local commits ahead of `origin/main` (push or rebase first) or an existing tag,
+checks with `gh secret list` that the three secrets below exist in
+`RELEASE_REPOSITORY` (from `scripts/prepare-release.ts`), and refuses an empty or
+`TODO` placeholder `plugins.updater.pubkey`. It needs an authenticated `gh`.
 
-The version command drafts notes (local `codex exec`, or conventional-commit
-fallback), opens `$EDITOR`, commits every version plus
-`docs/releases/vX.Y.Z.md`, tags `vX.Y.Z`, then asks before pushing. Review every
-claim; never publish unreviewed AI text. `--yes` skips the push question. A tag
-pushed from the source repo triggers `.github/workflows/release.yml` on
-`windows-latest`; no manual asset upload is needed.
+It then drafts notes (local `codex exec`, or conventional-commit fallback from
+the latest reachable `vX.Y.Z` tag or the root commit), opens `$EDITOR`, commits
+every version plus `docs/releases/vX.Y.Z.md`, tags `vX.Y.Z`, then asks before
+pushing. Review every claim; never publish unreviewed AI text. `--yes` skips the
+push question. A tag pushed from the source repo triggers
+`.github/workflows/release.yml` on `windows-latest`; no manual asset upload is
+needed.
+
+After the push (skip with `--no-watch`) the command waits for that tag's
+`release.yml` run, prints its URL, and streams `gh run watch`. When it succeeds
+it verifies the public release: stable, not draft, latest, exactly the five
+assets below, and an anonymous `latest.json` whose Windows URL is this release's
+Admin installer, which must download. Any failure stops with the reason; a
+success points to the [Manual release gate](#manual-release-gate-real-windows-installation).
 
 CI:
 

@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { release, type ReleaseOptions } from "./bump-version";
+import { parseCli, release, type ReleaseOptions } from "./bump-version";
+import { RELEASE_REPOSITORY } from "./prepare-release";
 
 const manifests = [
   "package.json",
@@ -13,6 +14,28 @@ const manifests = [
   "packages/ui/package.json",
   "apps/admin/src-tauri/tauri.conf.json",
   "apps/client/src-tauri/tauri.conf.json",
+];
+const download = `https://github.com/${RELEASE_REPOSITORY}/releases/download/v0.11.6`;
+const installerUrl = `${download}/OpenPiso.Central.Terminal_0.11.6_x64-setup.exe`;
+const assets = [
+  "OpenPiso.Central.Terminal_0.11.6_x64-setup.exe",
+  "OpenPiso.Central.Terminal_0.11.6_x64-setup.exe.sig",
+  "OpenPiso.Client_0.11.6_x64-setup.exe",
+  "latest.json",
+  "release.json",
+];
+const runList = [
+  "gh",
+  "run",
+  "list",
+  "-R",
+  RELEASE_REPOSITORY,
+  "--workflow",
+  "release.yml",
+  "--event",
+  "push",
+  "--json",
+  "databaseId,headBranch",
 ];
 const roots: string[] = [];
 afterEach(async () => {
@@ -29,6 +52,13 @@ async function fixture(overrides: Partial<ReleaseOptions> = {}) {
     await Bun.write(join(rootDir, path), JSON.stringify({ version: "0.11.5" }));
   }
   await Bun.write(
+    join(rootDir, "apps/admin/src-tauri/tauri.conf.json"),
+    JSON.stringify({
+      version: "0.11.5",
+      plugins: { updater: { pubkey: "dW50cnVzdGVkIGNvbW1lbnQ6" } },
+    }),
+  );
+  await Bun.write(
     join(rootDir, "Cargo.toml"),
     '[workspace.package]\nversion = "0.11.5"\n',
   );
@@ -37,10 +67,49 @@ async function fixture(overrides: Partial<ReleaseOptions> = {}) {
     rootDir,
     kind: "patch",
     editor: ["fake-editor"],
+    sleep: async () => {},
     run: async (command) => {
       commands.push(command);
-      if (command[1] === "branch") return { exitCode: 0, stdout: "main\n" };
-      if (command[1] === "rev-list") return { exitCode: 0, stdout: "0\t0\n" };
+      const [tool, sub, action] = command;
+      if (sub === "branch") return { exitCode: 0, stdout: "main\n" };
+      if (command.includes("--max-parents=0"))
+        return { exitCode: 0, stdout: "rootsha\nothersha\n" };
+      if (sub === "rev-list") return { exitCode: 0, stdout: "0\t0\n" };
+      if (tool === "gh" && sub === "secret")
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { name: "TAURI_SIGNING_PRIVATE_KEY" },
+            { name: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD" },
+            { name: "OPENPISO_POSTHOG_TOKEN" },
+          ]),
+        };
+      if (tool === "gh" && sub === "run" && action === "list")
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { databaseId: 7, headBranch: "main" },
+            { databaseId: 42, headBranch: "v0.11.6" },
+          ]),
+        };
+      if (tool === "gh" && sub === "release")
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            isDraft: false,
+            isPrerelease: false,
+            assets: assets.map((name) => ({ name, size: 1 })),
+          }),
+        };
+      if (tool === "gh" && sub === "api")
+        return { exitCode: 0, stdout: "v0.11.6\n" };
+      if (tool === "curl" && sub === "-fsSL")
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            platforms: { "windows-x86_64": { url: installerUrl } },
+          }),
+        };
       if (command[1] === "describe" || command[0] === "codex")
         return { exitCode: 1, stdout: "" };
       if (command[1] === "log")
@@ -158,7 +227,18 @@ describe("release workflow", () => {
       });
       await release(options);
       expect(commands).toContainEqual(["git", "tag", "--list", `v${version}`]);
-      expect(commands.every(([tool]) => tool === "git")).toBe(true);
+      expect(commands.every(([tool]) => tool === "git" || tool === "gh")).toBe(
+        true,
+      );
+      expect(commands).toContainEqual([
+        "gh",
+        "secret",
+        "list",
+        "-R",
+        RELEASE_REPOSITORY,
+        "--json",
+        "name",
+      ]);
       expect(
         (await Bun.file(join(rootDir, "package.json")).json()).version,
       ).toBe("0.11.5");
@@ -204,6 +284,10 @@ describe("release workflow", () => {
       expect(tag).toBeGreaterThan(commit);
       expect(commands[tag]).toEqual(["git", "tag", "v0.11.6"]);
       expect(prompted).toBe(!yes);
+      // Declining the push never watches the workflow.
+      expect(
+        commands.some(([tool, sub]) => tool === "gh" && sub === "run"),
+      ).toBe(yes);
       expect(commands.filter((command) => command[1] === "push")).toEqual(
         yes
           ? [["git", "push", "--atomic", "origin", "main", "refs/tags/v0.11.6"]]
@@ -230,9 +314,15 @@ describe("release workflow", () => {
     expect(commands).toContainEqual([
       "git",
       "log",
-      "988425a..HEAD",
+      "rootsha..HEAD",
       "--format=%s",
       "--reverse",
+    ]);
+    expect(commands).toContainEqual([
+      "git",
+      "rev-list",
+      "--max-parents=0",
+      "HEAD",
     ]);
     expect(commands).toContainEqual(["bun", "install", "--lockfile-only"]);
     expect(commands).toContainEqual([
@@ -263,6 +353,22 @@ describe("release CLI", () => {
       expect(await new Response(child.stderr).text()).toContain("Usage:");
     },
   );
+
+  test("accepts --no-watch alongside --yes and --dry-run", () => {
+    expect(parseCli(["minor", "--no-watch", "--yes", "--dry-run"])).toEqual({
+      kind: "minor",
+      yes: true,
+      dryRun: true,
+      noWatch: true,
+    });
+    expect(parseCli(["patch"])).toEqual({
+      kind: "patch",
+      yes: false,
+      dryRun: false,
+      noWatch: false,
+    });
+    expect(() => parseCli(["patch", "--watch"])).toThrow("--no-watch");
+  });
 });
 
 describe("release preconditions", () => {
@@ -296,11 +402,24 @@ describe("release preconditions", () => {
         ["git", "fetch", "origin", "main"],
         ["git", "rev-list", "--left-right", "--count", "main...origin/main"],
         ...(fastForward ? [["git", "merge", "--ff-only", "origin/main"]] : []),
-        ...(abort ? [] : [["git", "tag", "--list", "v0.11.6"]]),
+        ...(abort
+          ? []
+          : [
+              ["git", "tag", "--list", "v0.11.6"],
+              [
+                "gh",
+                "secret",
+                "list",
+                "-R",
+                RELEASE_REPOSITORY,
+                "--json",
+                "name",
+              ],
+            ]),
       ]);
-      expect((await Bun.file(join(rootDir, "package.json")).json()).version).toBe(
-        "0.11.5",
-      );
+      expect(
+        (await Bun.file(join(rootDir, "package.json")).json()).version,
+      ).toBe("0.11.5");
     },
   );
 
@@ -357,6 +476,243 @@ describe("release preconditions", () => {
         (await Bun.file(join(rootDir, "package.json")).json()).version,
       ).toBe("0.11.5");
       expect(commands.some(([tool]) => tool !== "git")).toBe(false);
+    },
+  );
+});
+
+describe("release prechecks", () => {
+  test.each(
+    (["a missing secret", "a placeholder public key"] as const).flatMap(
+      (problem) => [false, true].map((dryRun) => ({ problem, dryRun })),
+    ),
+  )(
+    "refuses $problem before modifying versions (dryRun: $dryRun)",
+    async ({ problem, dryRun }) => {
+      const { options, commands, rootDir } = await fixture({ dryRun });
+      const run = options.run;
+      if (problem === "a missing secret") {
+        options.run = async (command) => {
+          if (command[1] === "secret") {
+            commands.push(command);
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify([{ name: "TAURI_SIGNING_PRIVATE_KEY" }]),
+            };
+          }
+          return run(command);
+        };
+      } else {
+        await Bun.write(
+          join(rootDir, "apps/admin/src-tauri/tauri.conf.json"),
+          JSON.stringify({
+            version: "0.11.5",
+            plugins: {
+              updater: {
+                pubkey:
+                  "TODO_REPLACE_WITH_MINISIGN_PUBLIC_KEY_SEE_DOCS_RELEASING",
+              },
+            },
+          }),
+        );
+      }
+      await expect(release(options)).rejects.toThrow(
+        problem === "a missing secret"
+          ? "TAURI_SIGNING_PRIVATE_KEY_PASSWORD, OPENPISO_POSTHOG_TOKEN"
+          : "updater public key",
+      );
+      for (const path of [...manifests, "Cargo.toml"]) {
+        expect(await Bun.file(join(rootDir, path)).text()).toContain("0.11.5");
+        expect(await Bun.file(join(rootDir, path)).text()).not.toContain(
+          "0.11.6",
+        );
+      }
+      expect(commands.some(([tool]) => tool !== "git" && tool !== "gh")).toBe(
+        false,
+      );
+    },
+  );
+});
+
+describe("release watch", () => {
+  async function pushed(
+    respond: (command: string[]) => { exitCode: number; stdout: string } | null,
+    overrides: Partial<ReleaseOptions> = {},
+  ) {
+    const fake = await fixture({ yes: true, ...overrides });
+    const run = fake.options.run;
+    fake.options.run = async (command) => {
+      const response = respond(command);
+      if (!response) return run(command);
+      fake.commands.push(command);
+      return response;
+    };
+    return fake;
+  }
+
+  test("watches the tag's workflow run and verifies the public release", async () => {
+    const { options, commands } = await pushed(() => null);
+    await release(options);
+    const after = commands.slice(
+      commands.findIndex((command) => command[1] === "push") + 1,
+    );
+    expect(after).toEqual([
+      runList,
+      ["gh", "run", "watch", "42", "-R", RELEASE_REPOSITORY, "--exit-status"],
+      [
+        "gh",
+        "release",
+        "view",
+        "v0.11.6",
+        "-R",
+        RELEASE_REPOSITORY,
+        "--json",
+        "isDraft,isPrerelease,assets",
+      ],
+      [
+        "gh",
+        "api",
+        `repos/${RELEASE_REPOSITORY}/releases/latest`,
+        "--jq",
+        ".tag_name",
+      ],
+      ["curl", "-fsSL", `${download}/latest.json`],
+      ["curl", "-fsIL", installerUrl],
+    ]);
+  });
+
+  test("--no-watch pushes without watching", async () => {
+    const { options, commands } = await pushed(() => null, { noWatch: true });
+    await release(options);
+    expect(commands.at(-1)?.[1]).toBe("push");
+  });
+
+  test("polls until the tag's run appears, ignoring other branches", async () => {
+    let polls = 0;
+    let sleeps = 0;
+    const { options, commands } = await pushed(
+      (command) => {
+        if (command[2] !== "list" || command[1] !== "run") return null;
+        polls += 1;
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify(
+            polls < 3
+              ? [{ databaseId: 7, headBranch: "main" }]
+              : [{ databaseId: 9, headBranch: "v0.11.6" }],
+          ),
+        };
+      },
+      {
+        sleep: async () => {
+          sleeps += 1;
+        },
+      },
+    );
+    await release(options);
+    expect(polls).toBe(3);
+    expect(sleeps).toBe(2);
+    expect(commands).toContainEqual([
+      "gh",
+      "run",
+      "watch",
+      "9",
+      "-R",
+      RELEASE_REPOSITORY,
+      "--exit-status",
+    ]);
+  });
+
+  test("gives up when the tag's run never appears", async () => {
+    let polls = 0;
+    const { options, commands } = await pushed((command) => {
+      if (command[2] !== "list" || command[1] !== "run") return null;
+      polls += 1;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([{ databaseId: 7, headBranch: "main" }]),
+      };
+    });
+    await expect(release(options)).rejects.toThrow(
+      "No release.yml run found for v0.11.6",
+    );
+    expect(polls).toBeGreaterThan(1);
+    expect(polls).toBeLessThanOrEqual(60);
+    expect(commands.some((command) => command[2] === "watch")).toBe(false);
+  });
+
+  test("reports a failed workflow run", async () => {
+    const { options, commands } = await pushed((command) =>
+      command[2] === "watch" ? { exitCode: 1, stdout: "" } : null,
+    );
+    await expect(release(options)).rejects.toThrow(
+      `Release workflow failed: https://github.com/${RELEASE_REPOSITORY}/actions/runs/42`,
+    );
+    expect(commands.some((command) => command[1] === "release")).toBe(false);
+  });
+
+  const view = (patch: Record<string, unknown>) => (command: string[]) =>
+    command[1] === "release"
+      ? {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            isDraft: false,
+            isPrerelease: false,
+            assets: assets.map((name) => ({ name })),
+            ...patch,
+          }),
+        }
+      : null;
+  test.each([
+    ["draft", view({ isDraft: true }), "v0.11.6 is still a draft"],
+    ["prerelease", view({ isPrerelease: true }), "v0.11.6 is a prerelease"],
+    [
+      "not latest",
+      (command: string[]) =>
+        command[1] === "api" ? { exitCode: 0, stdout: "v0.11.5\n" } : null,
+      "Latest release is v0.11.5, expected v0.11.6",
+    ],
+    [
+      "missing asset",
+      view({ assets: assets.slice(1).map((name) => ({ name })) }),
+      "missing: OpenPiso.Central.Terminal_0.11.6_x64-setup.exe",
+    ],
+    [
+      "extra asset",
+      view({
+        assets: [...assets, "OpenPiso Client_0.11.6_x64-setup.exe"].map(
+          (name) => ({ name }),
+        ),
+      }),
+      "unexpected: OpenPiso Client_0.11.6_x64-setup.exe",
+    ],
+    [
+      "wrong feed URL",
+      (command: string[]) =>
+        command[1] === "-fsSL"
+          ? {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                platforms: {
+                  "windows-x86_64": {
+                    url: `${download}/OpenPiso Central Terminal_0.11.6_x64-setup.exe`,
+                  },
+                },
+              }),
+            }
+          : null,
+      `latest.json points at ${download}/OpenPiso Central Terminal_0.11.6_x64-setup.exe, expected ${installerUrl}`,
+    ],
+    [
+      "installer download failure",
+      (command: string[]) =>
+        command[1] === "-fsIL" ? { exitCode: 22, stdout: "" } : null,
+      `Installer download failed: ${installerUrl}`,
+    ],
+  ] as const)(
+    "refuses a published release with %s",
+    async (_, respond, message) => {
+      const { options } = await pushed(respond);
+      await expect(release(options)).rejects.toThrow(message);
     },
   );
 });
