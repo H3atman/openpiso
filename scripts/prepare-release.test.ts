@@ -67,6 +67,27 @@ test("CI helper writes publishable files from tagged source and signed bundle", 
     await prepareRelease(options);
     const latest = await Bun.file(join(rootDir, "publish/latest.json")).json();
     expect(Object.keys(latest.platforms)).toEqual(["windows-x86_64"]);
+    expect(latest.platforms["windows-x86_64"].url).toStartWith(
+      "https://github.com/H3atman/openpiso/releases/download/v0.12.0/",
+    );
+    await prepareRelease({
+      ...options,
+      repository: "H3atman/openpiso-releases",
+      outputDir: join(rootDir, "bridge"),
+    });
+    const bridge = await Bun.file(join(rootDir, "bridge/latest.json")).json();
+    expect(bridge.platforms["windows-x86_64"].url).toBe(
+      latest.platforms["windows-x86_64"].url.replace(
+        "/H3atman/openpiso/",
+        "/H3atman/openpiso-releases/",
+      ),
+    );
+    expect(await Bun.file(join(rootDir, "publish/latest.json")).json()).toEqual(
+      latest,
+    );
+    expect(await Bun.file(join(rootDir, "bridge/release.json")).json()).toEqual(
+      await Bun.file(join(rootDir, "publish/release.json")).json(),
+    );
     expect(latest.platforms["windows-x86_64"].url).toContain(
       "OpenPiso%20Central%20Terminal_0.12.0_x64-setup.exe",
     );
@@ -136,7 +157,7 @@ test("schema-raising release shares reviewed notes and warning across both manif
     platforms: {
       "windows-x86_64": {
         signature: "signed-installer",
-        url: "https://github.com/H3atman/openpiso-releases/releases/download/v0.12.0/OpenPiso%20Central%20Terminal_0.12.0_x64-setup.exe",
+        url: "https://github.com/H3atman/openpiso/releases/download/v0.12.0/OpenPiso%20Central%20Terminal_0.12.0_x64-setup.exe",
       },
     },
   });
@@ -154,6 +175,9 @@ test("same-schema release keeps notes untouched; first release warns conservativ
 test("publication refuses mismatched tags, preview versions, invalid metadata and schema regression", () => {
   for (const override of [
     { tag: "v0.12.1" },
+    { repository: "https://github.com/owner/repo" },
+    { repository: "owner/repo/releases" },
+    { repository: "" },
     { tag: "v0.12.0-beta.1", version: "0.12.0-beta.1" },
     { notes: " " },
     { signature: " " },

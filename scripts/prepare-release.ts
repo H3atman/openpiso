@@ -1,7 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { parseArgs } from "node:util";
 
-export const RELEASE_REPOSITORY = "H3atman/openpiso-releases";
+export const RELEASE_REPOSITORY = "H3atman/openpiso";
 
 function stableVersion(version: string): number[] {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
@@ -47,6 +48,7 @@ export function previousReleaseTag(pages: unknown, tag: string): string | null {
 }
 
 export function releaseDocuments(input: {
+  repository?: string;
   tag: string;
   version: string;
   schemaVersion: number;
@@ -55,6 +57,9 @@ export function releaseDocuments(input: {
   pubDate: string;
   signature: string;
 }) {
+  const repository = input.repository ?? RELEASE_REPOSITORY;
+  if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repository))
+    throw new Error("Expected release repository: owner/name");
   stableVersion(input.version);
   if (input.tag !== `v${input.version}`)
     throw new Error("Tag must match Admin version");
@@ -103,7 +108,7 @@ export function releaseDocuments(input: {
       platforms: {
         "windows-x86_64": {
           signature: input.signature.trim(),
-          url: `https://github.com/${RELEASE_REPOSITORY}/releases/download/${input.tag}/${encodeURIComponent(installer)}`,
+          url: `https://github.com/${repository}/releases/download/${input.tag}/${encodeURIComponent(installer)}`,
         },
       },
     },
@@ -177,6 +182,7 @@ async function releaseSource(rootDir: string, tag: string) {
 }
 
 export async function prepareRelease(options: {
+  repository?: string;
   rootDir: string;
   tag: string;
   previousFile: string | null;
@@ -211,6 +217,7 @@ export async function prepareRelease(options: {
     throw new Error("Client NSIS installer is missing");
   const documents = releaseDocuments({
     ...source,
+    repository: options.repository,
     tag: options.tag,
     previousSchemaVersion,
     pubDate: options.pubDate,
@@ -229,7 +236,12 @@ export async function prepareRelease(options: {
 }
 
 if (import.meta.main) {
-  const [command, tag, ...args] = Bun.argv.slice(2);
+  const { values, positionals } = parseArgs({
+    args: Bun.argv.slice(2),
+    options: { repository: { type: "string" } },
+    allowPositionals: true,
+  });
+  const [command, tag, ...args] = positionals;
   if (command === "validate" && tag) {
     await releaseSource(process.cwd(), tag);
   } else if (command === "previous" && tag && args[0]) {
@@ -237,6 +249,7 @@ if (import.meta.main) {
   } else if (command === "prepare" && tag && args.length === 3) {
     await prepareRelease({
       rootDir: process.cwd(),
+      repository: values.repository,
       tag,
       previousFile: args[0] === "-" ? null : args[0],
       bundleDir: args[1],
@@ -245,7 +258,7 @@ if (import.meta.main) {
     });
   } else {
     throw new Error(
-      "Usage: prepare-release.ts validate <tag> | previous <tag> <releases.json> | prepare <tag> <previous.json|-> <bundle-dir> <output-dir>",
+      "Usage: prepare-release.ts validate <tag> | previous <tag> <releases.json> | prepare <tag> <previous.json|-> <bundle-dir> <output-dir> [--repository owner/name]",
     );
   }
 }
