@@ -174,9 +174,11 @@ bun run version:patch --dry-run
 bun test scripts/bump-version.test.ts
 ```
 
-The command first fetches `origin/main`, fast-forwards `main` when behind, and refuses local commits ahead of it (including in dry runs).
-The command refuses an existing target tag or mismatched workspace versions.
-It bumps all package, Tauri, and Cargo versions together and refreshes both
+Before changing any file (dry runs included), the command fetches `origin/main`,
+fast-forwards `main` when behind, refuses local commits ahead of it, an existing
+target tag, or mismatched workspace versions, then uses `gh` to confirm the
+release secrets exist and refuses a missing or placeholder Admin updater public
+key. It bumps all package, Tauri, and Cargo versions together and refreshes both
 lockfiles. It drafts English owner-facing notes with `codex exec` in a read-only
 sandbox; unavailable, failed, empty, or malformed AI output falls back to
 conventional commits grouped under New / Fixed / Changed (at most eight bullets).

@@ -1,5 +1,7 @@
 import { createInterface } from "node:readline/promises";
 
+import { RELEASE_REPOSITORY } from "./prepare-release";
+
 type BumpKind = "patch" | "minor" | "major";
 
 type CommandResult = { exitCode: number; stdout: string };
@@ -8,10 +10,21 @@ export type ReleaseOptions = {
   kind: BumpKind;
   dryRun?: boolean;
   yes?: boolean;
+  noWatch?: boolean;
   editor: string[];
   run: (command: string[]) => Promise<CommandResult>;
   confirm: (message: string) => Promise<boolean>;
+  sleep?: (ms: number) => Promise<void>;
 };
+
+const REQUIRED_SECRETS = [
+  "TAURI_SIGNING_PRIVATE_KEY",
+  "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  "OPENPISO_POSTHOG_TOKEN",
+];
+// Polling for the tag's workflow run gives GitHub up to two minutes to register it.
+const RUN_POLL_ATTEMPTS = 24;
+const RUN_POLL_INTERVAL_MS = 5000;
 
 export async function release(options: ReleaseOptions): Promise<void> {
   const { rootDir, kind, run } = options;
@@ -40,7 +53,9 @@ export async function release(options: ReleaseOptions): Promise<void> {
       "--count",
       "main...origin/main",
     ])
-  ).split(/\s+/).map(Number);
+  )
+    .split(/\s+/)
+    .map(Number);
   if (ahead > 0) {
     throw new Error(
       "Release requires main to have no local commits ahead of origin/main. Push or rebase onto origin/main first",
@@ -105,6 +120,35 @@ export async function release(options: ReleaseOptions): Promise<void> {
   if (await checked(["git", "tag", "--list", tag])) {
     throw new Error(`Tag ${tag} already exists`);
   }
+  const secrets = JSON.parse(
+    await checked([
+      "gh",
+      "secret",
+      "list",
+      "-R",
+      RELEASE_REPOSITORY,
+      "--json",
+      "name",
+    ]),
+  ) as { name: string }[];
+  const missingSecrets = REQUIRED_SECRETS.filter(
+    (secret) => !secrets.some(({ name }) => name === secret),
+  );
+  if (missingSecrets.length) {
+    throw new Error(
+      `Missing GitHub Actions secrets in ${RELEASE_REPOSITORY}: ${missingSecrets.join(", ")}`,
+    );
+  }
+  const adminConfig = documents.find(
+    ({ path }) => path === "apps/admin/src-tauri/tauri.conf.json",
+  )?.document as { plugins?: { updater?: { pubkey?: unknown } } } | undefined;
+  const pubkey = adminConfig?.plugins?.updater?.pubkey;
+  // Matches CI's check in prepare-release.ts, which also refuses TODO placeholders.
+  if (typeof pubkey !== "string" || !pubkey.trim() || pubkey.includes("TODO")) {
+    throw new Error(
+      "Configure plugins.updater.pubkey in apps/admin/src-tauri/tauri.conf.json (the Admin updater public key) before releasing",
+    );
+  }
   if (options.dryRun) {
     console.info(`${currentVersion} -> ${nextVersion} (${kind})`);
     return;
@@ -138,7 +182,10 @@ export async function release(options: ReleaseOptions): Promise<void> {
     "v*",
   ]);
   const base =
-    tags.split("\n").find((tag) => /^v\d+\.\d+\.\d+$/.test(tag)) ?? "988425a";
+    tags.split("\n").find((tag) => /^v\d+\.\d+\.\d+$/.test(tag)) ??
+    (await checked(["git", "rev-list", "--max-parents=0", "HEAD"])).split(
+      "\n",
+    )[0];
   const log = await checked([
     "git",
     "log",
@@ -221,35 +268,156 @@ export async function release(options: ReleaseOptions): Promise<void> {
   ]);
   await checked(["git", "tag", tag]);
   if (
-    options.yes ||
-    (await options.confirm(`Push main and ${tag} to origin?`))
+    !options.yes &&
+    !(await options.confirm(`Push main and ${tag} to origin?`))
   ) {
-    await checked([
-      "git",
-      "push",
-      "--atomic",
-      "origin",
-      "main",
-      `refs/tags/${tag}`,
-    ]);
-  } else {
     console.info(
       `Release committed and tagged locally. Push with: git push --atomic origin main refs/tags/${tag}`,
     );
+    return;
   }
+  await checked([
+    "git",
+    "push",
+    "--atomic",
+    "origin",
+    "main",
+    `refs/tags/${tag}`,
+  ]);
+  if (options.noWatch) return;
+
+  const sleep = options.sleep ?? Bun.sleep;
+  let runId: number | undefined;
+  for (let attempt = 0; attempt < RUN_POLL_ATTEMPTS && !runId; attempt += 1) {
+    if (attempt > 0) await sleep(RUN_POLL_INTERVAL_MS);
+    const runs = JSON.parse(
+      await checked([
+        "gh",
+        "run",
+        "list",
+        "-R",
+        RELEASE_REPOSITORY,
+        "--workflow",
+        "release.yml",
+        "--event",
+        "push",
+        "--json",
+        "databaseId,headBranch",
+      ]),
+    ) as { databaseId: number; headBranch: string }[];
+    runId = runs.find(({ headBranch }) => headBranch === tag)?.databaseId;
+  }
+  if (!runId) {
+    throw new Error(
+      `No release.yml run found for ${tag}. Check https://github.com/${RELEASE_REPOSITORY}/actions/workflows/release.yml, then verify the release manually (docs/releasing.md)`,
+    );
+  }
+  const runUrl = `https://github.com/${RELEASE_REPOSITORY}/actions/runs/${runId}`;
+  console.info(`Watching release workflow: ${runUrl}`);
+  const watch = await run([
+    "gh",
+    "run",
+    "watch",
+    String(runId),
+    "-R",
+    RELEASE_REPOSITORY,
+    "--exit-status",
+  ]);
+  if (watch.exitCode !== 0) {
+    throw new Error(`Release workflow failed: ${runUrl}`);
+  }
+
+  const published = JSON.parse(
+    await checked([
+      "gh",
+      "release",
+      "view",
+      tag,
+      "-R",
+      RELEASE_REPOSITORY,
+      "--json",
+      "isDraft,isPrerelease,assets",
+    ]),
+  ) as { isDraft: boolean; isPrerelease: boolean; assets: { name: string }[] };
+  if (published.isDraft) throw new Error(`Release ${tag} is still a draft`);
+  if (published.isPrerelease) throw new Error(`Release ${tag} is a prerelease`);
+  const latest = await checked([
+    "gh",
+    "api",
+    `repos/${RELEASE_REPOSITORY}/releases/latest`,
+    "--jq",
+    ".tag_name",
+  ]);
+  if (latest !== tag) {
+    throw new Error(`Latest release is ${latest}, expected ${tag}`);
+  }
+  // GitHub stores uploaded names with spaces replaced by dots.
+  const installer = `OpenPiso.Central.Terminal_${nextVersion}_x64-setup.exe`;
+  const expectedAssets = [
+    installer,
+    `${installer}.sig`,
+    `OpenPiso.Client_${nextVersion}_x64-setup.exe`,
+    "latest.json",
+    "release.json",
+  ];
+  const assetNames = published.assets.map(({ name }) => name);
+  const missingAssets = expectedAssets.filter(
+    (name) => !assetNames.includes(name),
+  );
+  const extraAssets = assetNames.filter(
+    (name) => !expectedAssets.includes(name),
+  );
+  if (missingAssets.length || extraAssets.length) {
+    throw new Error(
+      `Release ${tag} assets differ; missing: ${missingAssets.join(", ") || "none"}; unexpected: ${extraAssets.join(", ") || "none"}`,
+    );
+  }
+  const download = `https://github.com/${RELEASE_REPOSITORY}/releases/download/${tag}`;
+  const feed = JSON.parse(
+    await checked(["curl", "-fsSL", `${download}/latest.json`]),
+  ) as { platforms?: Record<string, { url?: string } | undefined> };
+  const feedUrl = feed.platforms?.["windows-x86_64"]?.url;
+  if (feedUrl !== `${download}/${installer}`) {
+    throw new Error(
+      `latest.json points at ${feedUrl ?? "nothing"}, expected ${download}/${installer}`,
+    );
+  }
+  if (
+    (await run(["curl", "-fsIL", `${download}/${installer}`])).exitCode !== 0
+  ) {
+    throw new Error(`Installer download failed: ${download}/${installer}`);
+  }
+  console.info(
+    `Release ${tag} is published, latest, and downloadable: https://github.com/${RELEASE_REPOSITORY}/releases/tag/${tag}\n` +
+      "Next: complete the Manual release gate in docs/releasing.md.",
+  );
+}
+
+const USAGE =
+  "Usage: bun run scripts/bump-version.ts <patch|minor|major> [--yes] [--dry-run] [--no-watch]";
+
+// Parses `<kind> [flags]`; throws the usage text for anything else.
+export function parseCli(args: string[]) {
+  const [kind, ...flags] = args;
+  if (
+    (kind !== "patch" && kind !== "minor" && kind !== "major") ||
+    flags.some(
+      (flag) =>
+        flag !== "--yes" && flag !== "--dry-run" && flag !== "--no-watch",
+    )
+  ) {
+    throw new Error(USAGE);
+  }
+  return {
+    kind,
+    yes: flags.includes("--yes"),
+    dryRun: flags.includes("--dry-run"),
+    noWatch: flags.includes("--no-watch"),
+  };
 }
 
 async function main(): Promise<void> {
-  const [kind, ...flags] = process.argv.slice(2);
-  if (
-    (kind !== "patch" && kind !== "minor" && kind !== "major") ||
-    flags.some((flag) => flag !== "--yes" && flag !== "--dry-run")
-  ) {
-    throw new Error(
-      "Usage: bun run scripts/bump-version.ts <patch|minor|major> [--yes] [--dry-run]",
-    );
-  }
-  const dryRun = flags.includes("--dry-run");
+  const { kind, yes, dryRun, noWatch } = parseCli(process.argv.slice(2));
   const editor = process.env.EDITOR;
   if (!dryRun && !editor?.trim())
     throw new Error("Set $EDITOR to review release notes before releasing");
@@ -257,14 +425,19 @@ async function main(): Promise<void> {
     rootDir: `${import.meta.dir}/..`,
     kind,
     dryRun,
-    yes: flags.includes("--yes"),
+    yes,
+    noWatch,
     // The maintainer's editor command may include arguments (e.g. code --wait).
     editor:
       process.platform === "win32"
         ? ["cmd", "/d", "/s", "/c", editor ?? ""]
         : ["sh", "-c", `${editor ?? ""} "$@"`, "openpiso-editor"],
     run: async (command) => {
-      const interactive = command[0] === "sh" || command[0] === "cmd";
+      // Editors and `gh run watch` stream to the terminal.
+      const interactive =
+        command[0] === "sh" ||
+        command[0] === "cmd" ||
+        (command[0] === "gh" && command[2] === "watch");
       const child = Bun.spawn(command, {
         cwd: `${import.meta.dir}/..`,
         stdin: interactive ? "inherit" : "ignore",
