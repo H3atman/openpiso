@@ -88,8 +88,9 @@ test("CI helper writes publishable files from tagged source and signed bundle", 
     expect(await Bun.file(join(rootDir, "bridge/release.json")).json()).toEqual(
       await Bun.file(join(rootDir, "publish/release.json")).json(),
     );
-    expect(latest.platforms["windows-x86_64"].url).toContain(
-      "OpenPiso%20Central%20Terminal_0.12.0_x64-setup.exe",
+    // GitHub stores uploaded asset names with spaces replaced by dots.
+    expect(latest.platforms["windows-x86_64"].url).toEndWith(
+      "/v0.12.0/OpenPiso.Central.Terminal_0.12.0_x64-setup.exe",
     );
     expect(
       await Bun.file(join(rootDir, "publish/release-body.md")).text(),
@@ -157,7 +158,7 @@ test("schema-raising release shares reviewed notes and warning across both manif
     platforms: {
       "windows-x86_64": {
         signature: "signed-installer",
-        url: "https://github.com/H3atman/openpiso/releases/download/v0.12.0/OpenPiso%20Central%20Terminal_0.12.0_x64-setup.exe",
+        url: "https://github.com/H3atman/openpiso/releases/download/v0.12.0/OpenPiso.Central.Terminal_0.12.0_x64-setup.exe",
       },
     },
   });

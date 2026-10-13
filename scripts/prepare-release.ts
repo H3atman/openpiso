@@ -108,7 +108,8 @@ export function releaseDocuments(input: {
       platforms: {
         "windows-x86_64": {
           signature: input.signature.trim(),
-          url: `https://github.com/${repository}/releases/download/${input.tag}/${encodeURIComponent(installer)}`,
+          // GitHub stores uploaded asset names with spaces replaced by dots.
+          url: `https://github.com/${repository}/releases/download/${input.tag}/${installer.replaceAll(" ", ".")}`,
         },
       },
     },
@@ -213,7 +214,10 @@ export async function prepareRelease(options: {
     options.bundleDir,
     `OpenPiso Client_${source.version}_x64-setup.exe`,
   );
-  if (!(await Bun.file(clientInstaller).exists()) || !Bun.file(clientInstaller).size)
+  if (
+    !(await Bun.file(clientInstaller).exists()) ||
+    !Bun.file(clientInstaller).size
+  )
     throw new Error("Client NSIS installer is missing");
   const documents = releaseDocuments({
     ...source,
