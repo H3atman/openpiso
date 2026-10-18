@@ -17,11 +17,13 @@ test("CI helper writes publishable files from tagged source and signed bundle", 
     });
     await mkdir(join(rootDir, "docs/releases"), { recursive: true });
     await mkdir(join(rootDir, "bundle"));
+    const source = await Bun.file(
+      new URL("../apps/admin/src-tauri/src/db/mod.rs", import.meta.url),
+    ).text();
+    const schemaVersion = deriveSchemaVersion(source);
     await Bun.write(
       join(rootDir, "apps/admin/src-tauri/src/db/mod.rs"),
-      await Bun.file(
-        new URL("../apps/admin/src-tauri/src/db/mod.rs", import.meta.url),
-      ).text(),
+      source,
     );
     await Bun.write(
       join(rootDir, "apps/admin/src-tauri/tauri.conf.json"),
@@ -36,7 +38,7 @@ test("CI helper writes publishable files from tagged source and signed bundle", 
     );
     await Bun.write(
       join(rootDir, "previous.json"),
-      JSON.stringify({ version: "0.11.9", schema_version: 58 }),
+      JSON.stringify({ version: "0.11.9", schema_version: schemaVersion }),
     );
     const installer = join(
       rootDir,
@@ -99,7 +101,7 @@ test("CI helper writes publishable files from tagged source and signed bundle", 
       await Bun.file(join(rootDir, "publish/release.json")).json(),
     ).toEqual({
       version: "0.12.0",
-      schema_version: 58,
+      schema_version: schemaVersion,
       notes: "## New\n- Owner App Update.",
       pub_date: "2026-10-13T12:00:00Z",
     });
