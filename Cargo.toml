@@ -12,7 +12,7 @@ debug = 1
 
 [workspace.package]
 edition = "2021"
-version = "0.12.1"
+version = "0.12.2"
 license = "PolyForm-Shield-1.0.0"
 authors = ["OpenPiso Contributors"]
 
