@@ -143,3 +143,13 @@ export function formatShopClosed(status: ShopStatus | null): string {
     ? `Shop Closed until ${time}`
     : `Shop Closed — opens ${time}`;
 }
+
+/** Spin the Wheel password prompt copy (ADR-0088). */
+export const INVALID_SPIN_PASSWORD_MESSAGE = "Incorrect password. Try again.";
+
+/** Throttle lockout copy; `seconds` is 0 when the server did not say how long. */
+export function formatSpinThrottled(seconds: number): string {
+  return seconds > 0
+    ? `Too many failed attempts. Please wait ${seconds} second${seconds === 1 ? "" : "s"} before trying again.`
+    : "Too many failed attempts. Please wait before trying again.";
+}

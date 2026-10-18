@@ -39,8 +39,6 @@
     RedemptionTierMenu,
     TimerState,
     ViewMode,
-    WheelSegmentRow,
-    WheelSpinResult,
   } from "$lib/types";
   import {
     cheapestTierShortfallCenti,
@@ -61,9 +59,7 @@
     requestPointsTransfer,
     getCoinPromoMenu,
     getWheelEnabled,
-    getWheelSettings,
     setClientConfig,
-    spinWheel,
     transferTime,
   } from "$lib/api";
   import BrandMark from "$lib/components/BrandMark.svelte";
@@ -74,6 +70,7 @@
 
   import OwnerPinGate from "$lib/components/OwnerPinGate.svelte";
   import SettingsPanel from "$lib/components/SettingsPanel.svelte";
+  import { createSpinMachine } from "$lib/machines/spin.svelte";
   import WheelDialog from "$lib/components/WheelDialog.svelte";
   import WheelEntry from "$lib/components/WheelEntry.svelte";
   import WidgetOverlay from "$lib/components/WidgetOverlay.svelte";
@@ -162,55 +159,16 @@
   let unlockOwnerSettings = $state<() => Promise<void> | void>(() => {});
 
   // -- Wheel state -------------------------------------------------------
-  let wheelOpen = $state(false);
   let wheelEnabled = $state(false);
-  let wheelSegments = $state<WheelSegmentRow[]>([]);
-  let wheelSpinDuration = $state(5);
-  let wheelSpinResult = $state<WheelSpinResult | null>(null);
-  let wheelSpinning = $state(false);
-  let wheelError = $state("");
-
-  async function openWheel(): Promise<void> {
-    if (wheelOpen || wheelSpinning) return;
-    wheelError = "";
-    wheelSpinResult = null;
-    try {
-      const settings = await getWheelSettings();
-      wheelEnabled = settings.enabled;
-      if (!settings.enabled) return;
-      wheelSegments = settings.segments;
-      wheelSpinDuration = settings.spin_duration;
-      wheelOpen = true;
-    } catch (caught) {
-      localError = caught instanceof Error ? caught.message : String(caught);
-    }
-  }
-
-  function closeWheel(): void {
-    wheelOpen = false;
-    // Balance refresh on dialog close (ADR-0012 amendment).
-    void onAuthChanged();
-    void onTimerChanged();
-  }
-
-  async function spinWheelRequest(): Promise<void> {
-    if (wheelSpinning) return;
-    wheelSpinning = true;
-    wheelError = "";
-    try {
-      wheelSpinResult = await spinWheel();
-      wheelSegments = wheelSpinResult.segments;
-      localError = "";
-    } catch (caught) {
-      wheelError = caught instanceof Error ? caught.message : String(caught);
-    } finally {
-      wheelSpinning = false;
-      // Refresh even while the dialog is open: the post-spin balance decides
-      // whether another spin is affordable ("Spin Again" vs "Close").
+  // Shared with the Fullscreen Lock (ADR-0089).
+  const spin = createSpinMachine({
+    refresh: () => {
       void onAuthChanged();
       void onTimerChanged();
-    }
-  }
+    },
+    onEnabled: (enabled) => (wheelEnabled = enabled),
+    onError: (message) => (localError = message),
+  });
 
   let voucherCode = $state("");
   // The Coin Promo ladder is a collapsed disclosure so the Time tab fits the
@@ -785,7 +743,7 @@
               Enter <strong>{terminalPcNumber}</strong>, press Enter, then Insert Coin.
               Time is added instantly.
             </p>
-            <WheelEntry {accountAuth} {busy} {wheelEnabled} onOpen={() => void openWheel()} />
+            <WheelEntry {accountAuth} {busy} {wheelEnabled} onOpen={() => void spin.open()} />
           </div>
         {/if}
       {:else if selectedTab === "points" && accountAuth}
@@ -816,7 +774,7 @@
           >
         </div>
         <div class="mt-3 flex flex-col gap-1">
-          <WheelEntry {accountAuth} {busy} {wheelEnabled} onOpen={() => void openWheel()} />
+          <WheelEntry {accountAuth} {busy} {wheelEnabled} onOpen={() => void spin.open()} />
           <Button
             type="button"
             size="sm"
@@ -980,15 +938,12 @@
     onClose={() => (transferPointsOpen = false)}
   />
   <WheelDialog
-    open={wheelOpen}
-    segments={wheelSegments}
-    spinDuration={wheelSpinDuration}
-    spinResult={wheelSpinResult}
-    spinning={wheelSpinning}
-    error={wheelError}
+    spinState={spin.state}
     pointsBalanceCenti={accountAuth.account.points_balance_centi}
-    onSpin={spinWheelRequest}
-    onClose={closeWheel}
+    onSpin={spin.spin}
+    onSubmitPassword={spin.submitPassword}
+    onNextFreeSpin={spin.nextFreeSpin}
+    onClose={spin.close}
   />
 {/if}
 

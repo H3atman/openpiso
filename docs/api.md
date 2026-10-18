@@ -417,7 +417,25 @@ property: the hidden draw bias and effective odds stay owner-only rather than
 being disclosed to an untrusted Client. The Client receives equal slices and the
 server-resolved outcome only (ADR-0049).
 
-Requires `Authorization: Bearer <token>`. Takes no request body.
+Requires `Authorization: Bearer <token>`. The optional JSON body is
+`{"password": "<account password>"}`; an empty body is accepted (older clients).
+
+Spin Password Confirmation (ADR-0088) is the owner setting
+`password_confirmation_required` (default `false`). While it is off, the body is
+ignored. While it is on, the server verifies the password against the signed-in
+Account before the spin transaction, so a rejected spin never touches balances:
+
+| Condition | Response |
+| --- | --- |
+| Password missing or empty | `401 {"error":"password_required"}` |
+| Password wrong | `401 {"error":"invalid_password"}`; counted in the Account Login Throttle |
+| Username locked by the throttle | `429` with `Retry-After`, checked before the password is verified |
+
+Wrong spin passwords share the per-Username bucket with `POST
+/api/accounts/login` (ADR-0061), so repeated failures lock both. A correct
+password clears the bucket, as a successful login does. Free spins inside one
+spin's Free Spin Chain never prompt. `GET /api/wheel/settings` returns
+`password_confirmation_required` so clients know when to prompt.
 
 Response (account auth shape plus the resolved outcome and the exact segment snapshot used for animation):
 
@@ -594,7 +612,9 @@ The web admin exposes `GET /web-admin/wheel` and `PUT /web-admin/wheel` for
 Spin the Wheel. Both require the `op_owner` cookie. `update_wheel_settings`
 replaces the whole prize table atomically, the optional
 `bokya_rate_basis_points` (0–10,000), the `free_spin_cap` (0–10), the
-`spin_duration` (1–120), and the `enabled` flag, bumps the stored version, and
+`spin_duration` (1–120), the `enabled` flag, and the
+`password_confirmation_required` flag (required boolean, Spin Password
+Confirmation), bumps the stored version, and
 refuses a Bokya Rate that the submitted segments cannot satisfy or any
 configuration whose expected seconds payout is not below the
 point value of the most generous Redemption Tier (highest seconds per point).

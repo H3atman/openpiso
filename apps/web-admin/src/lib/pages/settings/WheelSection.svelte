@@ -22,6 +22,7 @@
   let bokyaRateInput = $state("");
   let freeSpinCap = $state(3);
   let spinDuration = $state(5);
+  let passwordConfirmationRequired = $state(false);
   let segments = $state<WheelSegmentRow[]>([]);
   let pointInputs = $state<string[]>([]);
   let wheelBusy = $state(false);
@@ -70,6 +71,7 @@
       bokyaRateInput = wheel.bokya_rate_basis_points?.toString() ?? "";
       freeSpinCap = wheel.free_spin_cap;
       spinDuration = wheel.spin_duration;
+      passwordConfirmationRequired = wheel.password_confirmation_required;
       segments = wheel.segments.map((s) => ({ ...s }));
       pointInputs = wheel.segments.map((s) => formatPoints(s.points_centi));
     } catch (caught) {
@@ -94,6 +96,7 @@
         bokya_rate_basis_points: bokyaRateBasisPoints,
         free_spin_cap: freeSpinCap,
         spin_duration: spinDuration,
+        password_confirmation_required: passwordConfirmationRequired,
         segments: segments.map((segment, index) => ({
           ...segment,
           points_centi: parsedPoints[index] ?? 0,
@@ -148,10 +151,16 @@
 <div class="rounded-lg border bg-card p-6">
   <div class="mb-4 flex flex-wrap items-center justify-between gap-4">
     <h3 class="text-lg font-semibold">Spin the Wheel Settings</h3>
-    <label class="flex items-center gap-2 text-sm font-medium">
-      <Switch size="sm" bind:checked={wheelEnabled} />
-      Wheel enabled
-    </label>
+    <div class="flex flex-wrap items-center gap-4">
+      <label class="flex items-center gap-2 text-sm font-medium">
+        <Switch size="sm" bind:checked={wheelEnabled} />
+        Wheel enabled
+      </label>
+      <label class="flex items-center gap-2 text-sm font-medium">
+        <Switch size="sm" bind:checked={passwordConfirmationRequired} />
+        Require password to spin
+      </label>
+    </div>
   </div>
 
   <!--

@@ -1,10 +1,12 @@
 <script lang="ts">
   // WheelDialog — animated Spin the Wheel dialog.
   //
-  // One shared dialog for both the Widget and the Fullscreen Lock.
-  // The caller fetches the wheel settings and passes segments + spin_duration;
-  // this component draws the wheel, animates the spin, and walks the
-  // pre-resolved free-spin chain one landing at a time.
+  // One shared dialog for both the Widget and the Fullscreen Lock. It is a
+  // view of the spin machine state (`$lib/machines/spin`) plus callbacks that
+  // dispatch to it: the machine owns the request, the Spin Duration timer and
+  // the free-spin chain; this component draws the wheel, turns it toward the
+  // current step, and shows the password prompt (ADR-0088). Its only flow
+  // state is the typed password.
   //
   // The server resolves the entire chain atomically before any animation;
   // the "spin again" button issues no request — it merely reveals the
@@ -13,43 +15,51 @@
   import { untrack } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Card, CardContent } from "$lib/components/ui/card";
+  import { Input } from "$lib/components/ui/input";
   import { formatPoints, formatProseDuration } from "$lib/format";
   import { chartCssColor, chartCssTextColor, computeSliceArcs, formatPrizeLine, labelAnchor, rotationForSlice, svgArcPath } from "@openpiso/ui/wheel";
-  import type { WheelSegmentRow, WheelSpinResult } from "$lib/types";
+  import type { SpinState } from "$lib/machines/spin";
   import WidgetOverlay from "./WidgetOverlay.svelte";
 
   interface Props {
-    open: boolean;
-    /** Wheel segment definitions (the full prize table, not just results). */
-    segments: WheelSegmentRow[];
-    /** Duration of the spin animation in seconds (owner-configured). */
-    spinDuration: number;
-    /** Latest spin outcome from the server, or null before first spin. */
-    spinResult: WheelSpinResult | null;
-    /** True while the server request is in-flight. */
-    spinning: boolean;
-    /** Error message from a failed spin. */
-    error: string;
+    /** Spin machine state; the dialog is open unless it is `closed`. */
+    spinState: SpinState;
     /** Customer's current points balance in centi-points (refreshed after
      *  each spin) — decides whether another spin is affordable. */
     pointsBalanceCenti: number;
     /** Called when the customer presses Spin. */
-    onSpin: () => Promise<void>;
+    onSpin: () => void;
+    /** Called with the typed password when the customer confirms a spin. */
+    onSubmitPassword: (password: string) => void;
+    /** Called when the customer presses "Spin again" in a free-spin chain. */
+    onNextFreeSpin: () => void;
     /** Called when the dialog is dismissed by the customer. */
     onClose: () => void;
   }
 
-  let {
-    open,
-    segments,
-    spinDuration,
-    spinResult,
-    spinning,
-    error,
-    pointsBalanceCenti,
-    onSpin,
-    onClose,
-  }: Props = $props();
+  let { spinState, pointsBalanceCenti, onSpin, onSubmitPassword, onNextFreeSpin, onClose }: Props = $props();
+
+  const open = $derived(spinState.kind !== "closed");
+  const segments = $derived(spinState.kind === "closed" ? [] : spinState.wheel.segments);
+  const animDurationSec = $derived(spinState.kind === "closed" ? 5 : spinState.wheel.spinDuration || 5);
+  const prompting = $derived(spinState.kind === "confirming");
+  // The spin is charged once requested; Close stays hidden until it is revealed.
+  const inFlight = $derived(spinState.kind === "requesting" || spinState.kind === "animating");
+  const error = $derived(spinState.kind === "idle" || spinState.kind === "confirming" ? spinState.error : "");
+
+  // The landing on screen, and the winnings of the chain up to and including it.
+  const landing = $derived(
+    spinState.kind === "animating" || spinState.kind === "revealed" ? spinState : null,
+  );
+  const step = $derived(landing?.result.steps[landing.step]);
+  const totalSteps = $derived(landing?.result.steps.length ?? 1);
+  const accumulated = $derived.by(() => {
+    const steps = landing?.result.steps.slice(0, landing.step + 1) ?? [];
+    return {
+      seconds: steps.reduce((sum, each) => sum + each.seconds, 0),
+      pointsCenti: steps.reduce((sum, each) => sum + each.points_centi, 0),
+    };
+  });
 
   /** Cost of one spin, mirrored from the server (ADR-0047). */
   const SPIN_COST_CENTI = 100;
@@ -61,42 +71,11 @@
   // Equal slices, so the geometry follows from the count alone (ADR-0047).
   const arcs = $derived(computeSliceArcs(segments.length));
 
-  // -- spin state machine -----------------------------------------------
-
-  type SpinPhase = "idle" | "animating" | "reveal" | "done";
-
-  // How long to wait after the wheel stops before showing the result text.
-  const WAIT_BEFORE_REVEAL_MS = 400;
-
-  let phase = $state<SpinPhase>("idle");
-  /** Which step of `spinResult.steps` is currently revealed (0-based). */
-  let currentStep = $state(0);
-  let accumulatedSeconds = $state(0);
-  let accumulatedPointsCenti = $state(0);
+  // -- wheel animation ---------------------------------------------------
 
   /** Running total of CSS rotation degrees so the wheel always continues
    *  from where it last stopped. */
   let totalRotationDeg = $state(0);
-
-  // Track the animation duration so the CSS transition matches.
-  let animDurationSec = $state(5);
-
-  // Reset state when the dialog opens.
-  $effect(() => {
-    if (open) {
-      phase = "idle";
-      currentStep = 0;
-      accumulatedSeconds = 0;
-      accumulatedPointsCenti = 0;
-    }
-  });
-
-  // Apply spin_duration prop when available.
-  $effect(() => {
-    if (spinDuration > 0) {
-      animDurationSec = spinDuration;
-    }
-  });
 
   /** Rotate wheel so the given segment index lands at the pointer.
    *  Adds 3–5 extra full turns for visual drama. */
@@ -112,98 +91,24 @@
     totalRotationDeg += diff + extraTurns * 360;
   }
 
-  /** True while a server request is in flight, so the animation effect does
-   *  not replay the PREVIOUS spin's result while waiting for the new one. */
-  let awaitingResult = $state(false);
-
-  /** Kick off a spin: request the server outcome, then animate. */
-  async function handleSpin(): Promise<void> {
-    if (phase === "animating" || awaitingResult) return;
-    awaitingResult = true;
-    phase = "animating";
-    currentStep = 0;
-    accumulatedSeconds = 0;
-    accumulatedPointsCenti = 0;
-    try {
-      await onSpin();
-    } finally {
-      awaitingResult = false;
-    }
-    // A failed spin leaves the previous result in place; fall back to idle
-    // instead of re-animating an outcome that was already paid out.
-    if (error) {
-      phase = "idle";
-      return;
-    }
-    // spinResult signal updates via the effect below.
-  }
-
-  /** Advance to the next free-spin landing WITHOUT a server request.
-   *
-   *  The "spin again" control issues NO request — the outcome was already
-   *  chosen and credited by the server in the single `spin_wheel` call.
-   *  The client only animates a result the server already chose, consistent
-   *  with the rule that the client is untrusted (ADR-0005). This looks like
-   *  a bug to a reviewer, hence this comment. */
-  function advanceStep(): void {
-    if (!spinResult) return;
-    const next = currentStep + 1;
-    if (next >= spinResult.steps.length) {
-      phase = "done";
-      return;
-    }
-    const nextStep = spinResult.steps[next];
-    currentStep = next;
-    accumulatedSeconds += nextStep.seconds;
-    accumulatedPointsCenti += nextStep.points_centi;
-    phase = "animating";
-  }
-
-  // When spinResult arrives and we are in animating phase, start the
-  // wheel rotation animation.  After the animation duration elapses,
-  // transition to "reveal" so the customer sees the result.
+  // Turn the wheel toward each step as the machine enters `animating`.
   $effect(() => {
-    if (awaitingResult || phase !== "animating" || !spinResult || spinResult.steps.length === 0) {
-      return;
-    }
-    const step = spinResult.steps[currentStep];
-    if (!step) return;
-    untrack(() => rotateToSegment(step.segment_index));
-    if (currentStep === 0) {
-      accumulatedSeconds = step.seconds;
-      accumulatedPointsCenti = step.points_centi;
-    }
-    const ms = animDurationSec * 1000 + WAIT_BEFORE_REVEAL_MS;
-    const timer = setTimeout(() => {
-      phase = "reveal";
-    }, ms);
-    return () => clearTimeout(timer);
-  });
-
-  // Detect a spin that failed (spinning false but spinResult still null).
-  let wasSpinning = $state(false);
-  $effect(() => {
-    if (spinning && !wasSpinning) {
-      wasSpinning = true;
-    } else if (!spinning && wasSpinning) {
-      wasSpinning = false;
-      if (phase === "animating" && !spinResult) {
-        // The server request finished but returned no result — error case.
-        phase = "idle";
-      }
+    if (spinState.kind === "animating") {
+      const target = spinState.result.steps[spinState.step];
+      if (target) untrack(() => rotateToSegment(target.segment_index));
     }
   });
 
-  // -- derived display helpers ------------------------------------------
+  // The password never outlives the prompt: clear it whenever the machine
+  // leaves `confirming` (submit, close, ...).
+  let password = $state("");
+  $effect(() => {
+    if (!prompting) password = "";
+  });
 
-  const totalSteps = $derived(spinResult?.steps.length ?? 1);
-
-  function closeAndRefresh(): void {
-    // Balances refresh on dialog close, not on animation end (consistent
-    // with the rule that the server already credited the outcome). A customer
-    // who closes mid-chain has already been credited in full, so the next
-    // balance they see is correct and never stale.
-    onClose();
+  function submitPassword(event: SubmitEvent): void {
+    event.preventDefault();
+    onSubmitPassword(password);
   }
 </script>
 
@@ -211,11 +116,9 @@
      afford one, otherwise Close plus the shortfall reason. -->
 {#snippet endActions()}
   {#if canAffordSpin}
-    <Button type="button" disabled={spinning} onclick={() => void handleSpin()}>
-      {spinning ? "Spinning…" : "Spin Again"}
-    </Button>
+    <Button type="button" onclick={onSpin}>Spin Again</Button>
   {:else}
-    <Button type="button" onclick={closeAndRefresh}>Close</Button>
+    <Button type="button" onclick={onClose}>Close</Button>
     <p class="text-destructive text-xs font-bold">Not enough points</p>
   {/if}
 {/snippet}
@@ -311,30 +214,40 @@
         </p>
       {/if}
 
-      <!-- Phase: idle — show Spin button -->
-      {#if phase === "idle"}
-        <Button
-          type="button"
-          disabled={spinning}
-          onclick={() => void handleSpin()}
-        >
-          {spinning ? "Spinning…" : "Spin for 1 point"}
-        </Button>
+      <!-- Password confirmation (ADR-0088) — replaces the spin controls
+           until the customer submits. -->
+      {#if prompting}
+        <form class="flex w-full flex-col gap-2" onsubmit={submitPassword}>
+          <label for="wheel-password" class="text-muted-foreground text-xs font-bold tracking-wider uppercase">
+            Confirm password to spin
+          </label>
+          <Input
+            id="wheel-password"
+            bind:value={password}
+            type="password"
+            autocomplete="current-password"
+            maxlength={128}
+            required
+          />
+          <Button type="submit" disabled={!password}>Spin for 1 point</Button>
+        </form>
+
+      <!-- State: idle — show Spin button -->
+      {:else if spinState.kind === "idle"}
+        <Button type="button" onclick={onSpin}>Spin for 1 point</Button>
         <p class="text-muted-foreground text-center text-[0.6rem]">
           Bet 1 point for a chance at bonus time.
         </p>
 
-      <!-- Phase: animating — wheel is turning -->
-      {:else if phase === "animating"}
+      <!-- State: requesting / animating — wheel is turning -->
+      {:else if inFlight}
         <p class="text-muted-foreground animate-pulse text-center text-xs">
           Spinning…
         </p>
 
-      <!-- Phase: reveal — show current landing -->
-      {:else if phase === "reveal"}
-        {#if spinResult && spinResult.steps[currentStep]}
-          {@const step = spinResult.steps[currentStep]}
-          {@const hasNextSpin = step.free_spin && currentStep < totalSteps - 1}
+      <!-- State: revealed — show current landing -->
+      {:else if spinState.kind === "revealed" && step}
+        {@const hasNextSpin = step.free_spin && spinState.step < totalSteps - 1}
           <div class="flex flex-col items-center gap-2 text-center" role="status" aria-live="polite">
             {#if step.seconds > 0 || step.points_centi > 0}
               <strong class="text-foreground text-sm">
@@ -357,15 +270,15 @@
             {#if totalSteps > 1}
               <div class="bg-muted rounded-md px-3 py-1.5">
                 <p class="text-muted-foreground text-[0.6rem] tracking-wider uppercase">
-                  Accumulated ({currentStep + 1}/{totalSteps})
+                  Accumulated ({spinState.step + 1}/{totalSteps})
                 </p>
                 <p class="text-xs font-bold">
-                  {#if accumulatedSeconds > 0}
-                    {formatProseDuration(accumulatedSeconds)}
+                  {#if accumulated.seconds > 0}
+                    {formatProseDuration(accumulated.seconds)}
                   {/if}
-                  {#if accumulatedPointsCenti > 0}
-                    {accumulatedSeconds > 0 ? " + " : ""}
-                    {formatPoints(accumulatedPointsCenti)} pts
+                  {#if accumulated.pointsCenti > 0}
+                    {accumulated.seconds > 0 ? " + " : ""}
+                    {formatPoints(accumulated.pointsCenti)} pts
                   {/if}
                 </p>
               </div>
@@ -376,52 +289,28 @@
               <Button
                 type="button"
                 variant="outline"
-                onclick={advanceStep}
+                onclick={onNextFreeSpin}
               >
                 Spin again
               </Button>
               <!-- "Spin again" issues no server request — the outcome was
-                   already resolved by the server. See advanceStep(). -->
-            {:else if !step.free_spin || currentStep >= totalSteps - 1}
+                   already resolved by the server. See nextFreeSpin in the spin machine. -->
+            {:else}
               {@render endActions()}
             {/if}
           </div>
-        {/if}
 
-      <!-- Phase: done — all steps revealed -->
-      {:else if phase === "done"}
-        <div class="flex flex-col items-center gap-2 text-center" role="status" aria-live="polite">
-          <strong class="text-foreground text-sm">
-            {#if accumulatedSeconds > 0 || accumulatedPointsCenti > 0}
-              Total won:
-              {#if accumulatedSeconds > 0}
-                {formatProseDuration(accumulatedSeconds)}
-              {/if}
-              {#if accumulatedPointsCenti > 0}
-                {accumulatedSeconds > 0 ? " + " : ""}
-                {formatPoints(accumulatedPointsCenti)} pts
-              {/if}
-            {:else}
-              No winnings this round.
-            {/if}
-          </strong>
-          {@render endActions()}
-        </div>
       {/if}
 
-      <!-- Close button always available — spec req: customer can close at
-           any point, including mid-animation, mid-chain, and after the
-           round ends (where the primary control may be "Spin Again"). -->
-      <div class="mt-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onclick={closeAndRefresh}
-        >
-          Close
-        </Button>
-      </div>
+      <!-- Close is hidden while the spin is in flight: it is already charged,
+           and closing would lose the prize. -->
+      {#if !inFlight}
+        <div class="mt-1">
+          <Button type="button" variant="ghost" size="sm" onclick={onClose}>
+            Close
+          </Button>
+        </div>
+      {/if}
     </CardContent>
   </Card>
 </WidgetOverlay>

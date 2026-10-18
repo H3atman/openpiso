@@ -484,7 +484,8 @@ generous Redemption Tier, must stay positive, and is enforced both when the
 owner saves and on the spin path — a negative-edge wheel refuses to spin.
 Points awarded by the wheel are tracked via the **Points Minted by Wheel**
 report line — there is no points-axis guardrail, deliberate asymmetry.
-Owner can enable/disable it at any time. See
+Owner can enable/disable it at any time. The owner can also require
+**Spin Password Confirmation** for paid spins. See
 [ADR-0012](adr/0012-spin-the-wheel.md),
 [ADR-0046](adr/0046-spin-the-wheel-points-prize.md),
 [ADR-0047](adr/0047-equal-slice-wheel-segments.md), and
@@ -551,6 +552,17 @@ accumulated plus any remaining free-spin segments forfeited. The server
 resolves the entire chain in one transaction before the client animation. See
 [ADR-0012](adr/0012-spin-the-wheel.md) and
 [ADR-0046](adr/0046-spin-the-wheel-points-prize.md).
+
+### Spin Password Confirmation **(decided)**
+
+The customer re-entering their **Account** password to authorize each paid
+spin of the **Spin the Wheel**. Free spins within a **Free Spin Chain** never
+ask, because the server has already resolved them. The server checks the
+password before charging the point. A wrong password charges nothing and
+counts toward the **Account Login Throttle**. The owner can turn it on or off
+for the whole shop, and it is off by default. It uses the customer's existing Account password, not the
+**Owner PIN** or a separate spin credential. See
+[ADR-0088](adr/0088-spin-password-confirmation.md).
 
 ### Diskless **(decided context)**
 

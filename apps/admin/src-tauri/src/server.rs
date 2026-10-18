@@ -763,6 +763,7 @@ fn password_change_response(
             | AppError::AttendanceNotFound
             | AppError::AttendanceClaimDenied { .. }
             | AppError::RestoreRejected { .. }
+            | AppError::SpinPasswordRejected(_)
             | AppError::UnsupportedMigrationHistory(_),
         ) => (StatusCode::INTERNAL_SERVER_ERROR, "password change failed").into_response(),
     }
@@ -819,10 +820,76 @@ async fn points_redeem(
     }))
 }
 
+/// Optional body of `POST /api/wheel/spin`. Old clients send none.
+#[derive(Deserialize)]
+struct WheelSpinInput {
+    password: Option<String>,
+}
+
+/// Spin Password Confirmation: when the owner requires it, the Account's
+/// password must verify before the spin transaction starts. Failures share
+/// the Account login throttle bucket, so a locked Username is refused before
+/// its password is ever checked.
+async fn require_spin_password(
+    state: &ServerState,
+    peer: SocketAddr,
+    token: &AccountToken,
+    password: Option<&str>,
+) -> crate::errors::AppResult<()> {
+    if !db::wheel_password_confirmation_required(&state.pool).await? {
+        return Ok(());
+    }
+    let Some(password) = password.filter(|password| !password.is_empty()) else {
+        return Err(AppError::SpinPasswordRejected("password_required"));
+    };
+    let username_normalized =
+        accounts::active_username_normalized_by_id(&state.pool, &token.account_id).await?;
+    let now = chrono::Utc::now();
+    if let crate::login_throttle::Decision::Locked { retry_after_secs } = state
+        .account_login_throttle
+        .check(&username_normalized, now)
+        .await
+    {
+        return Err(AppError::Throttled { retry_after_secs });
+    }
+    if accounts::active_account_password_matches(&state.pool, &token.account_id, password).await? {
+        state
+            .account_login_throttle
+            .record_success(&username_normalized)
+            .await;
+        return Ok(());
+    }
+    if let Some(lockout_seconds) = state
+        .account_login_throttle
+        .record_failure(&username_normalized, now)
+        .await
+    {
+        accounts::audit_login_throttled(
+            &state.pool,
+            &username_normalized,
+            &peer.ip().to_string(),
+            Some(&token.pc_id),
+            account_login_throttle::FAILURE_THRESHOLD,
+            lockout_seconds,
+        )
+        .await?;
+    }
+    Err(AppError::SpinPasswordRejected("invalid_password"))
+}
+
 async fn wheel_spin(
     State(state): State<ServerState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     session: AccountSession,
+    body: axum::body::Bytes,
 ) -> HttpResult<WheelSpinResponse> {
+    let input = if body.is_empty() {
+        WheelSpinInput { password: None }
+    } else {
+        serde_json::from_slice::<WheelSpinInput>(&body)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?
+    };
+    require_spin_password(&state, peer, &session.token, input.password.as_deref()).await?;
     let (claimed_session, result) = state
         .sessions
         .spin_wheel(&state.pool, &session.token)
@@ -6015,5 +6082,201 @@ mod tests {
             .expect("spin segments")
             .iter()
             .all(|segment| segment.get("probability_basis_points").is_none()));
+    }
+
+    // -- Spin Password Confirmation ---------------------------------------
+
+    /// Enable the wheel, optionally require password confirmation, and sign up
+    /// a funded Account (1000 centi-points). Returns `(pool, address, token,
+    /// account_id)`.
+    async fn spin_password_fixture(required: bool) -> (SqlitePool, String, String, String) {
+        let pool = seeded_pool().await;
+        sqlx::query(
+            "UPDATE wheel_settings SET enabled = 1, password_confirmation_required = ? WHERE id = 1",
+        )
+        .bind(i64::from(required))
+        .execute(&pool)
+        .await
+        .expect("wheel settings should update");
+        let address = spawn_client_server(pool.clone()).await;
+        let client = reqwest::Client::new();
+        let (token, account_id) = signup(&client, &address, "spin-pw-user", "pc-01").await;
+        sqlx::query("UPDATE accounts SET points_balance_centi = 1000 WHERE id = ?")
+            .bind(&account_id)
+            .execute(&pool)
+            .await
+            .expect("account should be funded");
+        (pool, address, token, account_id)
+    }
+
+    async fn spin_request(
+        address: &str,
+        token: &str,
+        body: Option<serde_json::Value>,
+    ) -> reqwest::Response {
+        let request = reqwest::Client::new()
+            .post(format!("http://{address}/api/wheel/spin"))
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+        let request = match body {
+            Some(body) => request.json(&body),
+            None => request,
+        };
+        request.send().await.expect("spin request should complete")
+    }
+
+    async fn spin_balance_and_count(pool: &SqlitePool, account_id: &str) -> (i64, i64) {
+        let balance: i64 =
+            sqlx::query_scalar("SELECT points_balance_centi FROM accounts WHERE id = ?")
+                .bind(account_id)
+                .fetch_one(pool)
+                .await
+                .expect("balance should be readable");
+        let spins: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wheel_spins")
+            .fetch_one(pool)
+            .await
+            .expect("spin count should be readable");
+        (balance, spins)
+    }
+
+    #[tokio::test]
+    async fn spin_without_body_succeeds_when_password_confirmation_is_off() {
+        let (pool, address, token, account_id) = spin_password_fixture(false).await;
+
+        let response = spin_request(&address, &token, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (_, spins) = spin_balance_and_count(&pool, &account_id).await;
+        assert_eq!(spins, 1);
+
+        // Current clients send `{}` when no password was entered.
+        let response = spin_request(&address, &token, Some(serde_json::json!({}))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // A supplied password is ignored while the setting is off.
+        let response = spin_request(
+            &address,
+            &token,
+            Some(serde_json::json!({ "password": "wrong" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn spin_requires_password_when_confirmation_is_on() {
+        let (pool, address, token, account_id) = spin_password_fixture(true).await;
+
+        for body in [
+            None,
+            Some(serde_json::json!({})),
+            Some(serde_json::json!({ "password": "" })),
+        ] {
+            let response = spin_request(&address, &token, body).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let body = response
+                .json::<serde_json::Value>()
+                .await
+                .expect("error JSON");
+            assert_eq!(body["error"], "password_required");
+        }
+        assert_eq!(spin_balance_and_count(&pool, &account_id).await, (1000, 0));
+    }
+
+    #[tokio::test]
+    async fn spin_rejects_wrong_password_without_charging() {
+        let (pool, address, token, account_id) = spin_password_fixture(true).await;
+
+        let response = spin_request(
+            &address,
+            &token,
+            Some(serde_json::json!({ "password": "not-the-password" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .expect("error JSON");
+        assert_eq!(body["error"], "invalid_password");
+        assert_eq!(spin_balance_and_count(&pool, &account_id).await, (1000, 0));
+    }
+
+    #[tokio::test]
+    async fn spin_with_correct_password_charges_one_point() {
+        let (pool, address, token, account_id) = spin_password_fixture(true).await;
+
+        let response = spin_request(
+            &address,
+            &token,
+            Some(serde_json::json!({ "password": "password" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (_, spins) = spin_balance_and_count(&pool, &account_id).await;
+        assert_eq!(spins, 1);
+        let spent: i64 = sqlx::query_scalar("SELECT points_spent_centi FROM wheel_spins")
+            .fetch_one(&pool)
+            .await
+            .expect("spin row should exist");
+        assert_eq!(spent, 100);
+    }
+
+    #[tokio::test]
+    async fn repeated_wrong_spin_passwords_lock_spin_and_login() {
+        let (pool, address, token, account_id) = spin_password_fixture(true).await;
+
+        for _ in 0..account_login_throttle::FAILURE_THRESHOLD {
+            let response = spin_request(
+                &address,
+                &token,
+                Some(serde_json::json!({ "password": "wrong-password" })),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        // Locked: even the correct password is refused before verification.
+        let spin = spin_request(
+            &address,
+            &token,
+            Some(serde_json::json!({ "password": "password" })),
+        )
+        .await;
+        assert_eq!(spin.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(spin_balance_and_count(&pool, &account_id).await, (1000, 0));
+
+        // Same bucket as login.
+        let client = reqwest::Client::new();
+        let login = account_login_request(&client, &address, "spin-pw-user", "password").await;
+        assert_eq!(login.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    async fn read_wheel_settings(address: &str, token: &str) -> serde_json::Value {
+        reqwest::Client::new()
+            .get(format!("http://{address}/api/wheel/settings"))
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("settings request should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("settings JSON")
+    }
+
+    #[tokio::test]
+    async fn wheel_settings_expose_password_confirmation_required() {
+        let (pool, address, token, _) = spin_password_fixture(false).await;
+
+        assert_eq!(
+            read_wheel_settings(&address, &token).await["password_confirmation_required"],
+            false
+        );
+        sqlx::query("UPDATE wheel_settings SET password_confirmation_required = 1 WHERE id = 1")
+            .execute(&pool)
+            .await
+            .expect("setting should update");
+        assert_eq!(
+            read_wheel_settings(&address, &token).await["password_confirmation_required"],
+            true
+        );
     }
 }

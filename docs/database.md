@@ -256,8 +256,10 @@ write the same seconds and negative centipoint delta to `audit_log`.
 
 `wheel_settings` holds one local row: the master `enabled` flag, the nullable
 `bokya_rate_basis_points` (0–10,000), the `free_spin_cap` (0–10),
-`spin_duration` (1–120, default 5), and a `version` that increments on every
-edit. A null Bokya Rate means unset and preserves the uniform draw; numeric zero
+`spin_duration` (1–120, default 5), `password_confirmation_required` (0/1,
+default 0, migration 0059, ADR-0088: `POST /api/wheel/spin` must carry the
+Account's password; off for new and existing shops), and a `version` that
+increments on every edit. A null Bokya Rate means unset and preserves the uniform draw; numeric zero
 is a configured Bokya Rate, not null. `wheel_segments` stores the ordered prize
 table.
 Each segment carries a `label`, `seconds` (non-negative), `points_centi`

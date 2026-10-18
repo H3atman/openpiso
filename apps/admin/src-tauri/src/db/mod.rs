@@ -67,8 +67,8 @@ pub use pcs::{
 #[cfg(test)]
 pub use pcs::{disconnect_pc, heartbeat_by_identity_only};
 pub use points_wheel::{
-    client_wheel_settings, spin_wheel, update_wheel_settings, wheel_enabled, wheel_settings,
-    ThreadSpinRng,
+    client_wheel_settings, spin_wheel, update_wheel_settings, wheel_enabled,
+    wheel_password_confirmation_required, wheel_settings, ThreadSpinRng,
 };
 pub use rates::{kiosk_config, shop_rate, update_shop_rate};
 pub use redemption_tiers::{
@@ -98,7 +98,7 @@ pub use voucher_batches::{
 };
 pub use vouchers::{create_voucher, redeem_voucher, void_voucher, vouchers};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 58;
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 59;
 
 pub async fn connect(database_path: &Path, backup_directory: &Path) -> AppResult<SqlitePool> {
     let options = SqliteConnectOptions::new()
@@ -366,6 +366,10 @@ pub(crate) async fn run_migrations(pool: &SqlitePool, backup_directory: &Path) -
         (
             58_i64,
             include_str!("../../migrations/0058_attendance_reporting.sql"),
+        ),
+        (
+            59_i64,
+            include_str!("../../migrations/0059_wheel_password_confirmation.sql"),
         ),
     ];
     let known_version = migrations.last().map(|(version, _)| *version).unwrap_or(0);

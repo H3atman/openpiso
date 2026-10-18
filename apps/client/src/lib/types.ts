@@ -257,6 +257,8 @@ export interface WheelSettings {
   point_value_seconds: number;
   house_edge_basis_points: number;
   unsafe_house_edge: boolean;
+  /** ADR-0088: paid spins require the customer's Account password. */
+  password_confirmation_required: boolean;
 }
 
 export interface WheelSpinStep {

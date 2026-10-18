@@ -1,12 +1,14 @@
 // ---------------------------------------------------------------------------
 // Wheel browser test — open, spin, chain tap-through, close with balance
-// refresh, error handling, and disable-while-flying.
+// refresh, error handling, close-unavailable-while-flying, and the password
+// confirmation flow (ADR-0088). Screenshots land in target/wheel-*.png.
 //
 // Follows the existing browser-script prior art (widget-tabs-browser.ts,
 // widget-claim-browser.ts).
 // ---------------------------------------------------------------------------
 
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -102,6 +104,34 @@ async function clickWheelEntry(): Promise<void> {
     if (!button) throw new Error('missing wheel entry');
     button.click();
   })()`);
+}
+
+/** Type into the wheel's password field the way a customer would. */
+async function typePassword(value: string): Promise<void> {
+  await evaluate(`(() => {
+    const input = document.querySelector('#wheel-password');
+    if (!input) throw new Error('missing password field');
+    input.value = ${JSON.stringify(value)};
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+}
+const hasPasswordField = "Boolean(document.querySelector('#wheel-password'))";
+const dialogText = "document.querySelector('[role=\"dialog\"]')?.innerText ?? ''";
+const spinPasswords = "window.widgetTabsHarness.spinPasswords";
+async function openWheelDialog(): Promise<void> {
+  await clickWheelEntry();
+  await waitFor("Boolean(document.querySelector('[role=\"dialog\"] svg[aria-label=\"Wheel\"]'))", true, "wheel dialog open");
+}
+async function closeWheelDialog(): Promise<void> {
+  await clickDialog("Close");
+  await waitFor("Boolean(document.querySelector('[role=\"dialog\"]'))", false, "wheel dialog closed");
+}
+async function saveScreenshot(name: string): Promise<void> {
+  const shot = (await call("Page.captureScreenshot", { format: "png" })) as { data: string };
+  const artifact = resolve(dir, "../../target", name);
+  await mkdir(resolve(artifact, ".."), { recursive: true });
+  await Bun.write(artifact, Buffer.from(shot.data, "base64"));
+  console.log(`ARTIFACT: ${artifact}`);
 }
 
 let spinCalls = 0;
@@ -213,21 +243,134 @@ try {
   await waitFor("Boolean(document.querySelector('[role=\"dialog\"]'))", false);
   await waitFor(`window.widgetTabsHarness.refreshCalls > ${refreshBefore}`, true, "balance refresh on close");
 
-  // Close remains available while the server request is still in flight, and
-  // completion performs a second refresh so the committed balance is visible.
+  // Close is unavailable while the spin is in flight (requesting, then the
+  // wheel turning): the spin is already charged, so closing would lose the
+  // prize. It returns once the landing is revealed, and closing refreshes the
+  // balance again.
   await evaluate(`window.widgetTabsHarness.setWheelResult({
     seconds_won: 300, points_won_centi: 0, free_spins_triggered: 0,
     segments: [{ label: '5 minutes', seconds: 300, points_centi: 0, free_spin: false }],
     steps: [{ segment_index: 0, label: '5 minutes', seconds: 300, points_centi: 0, free_spin: false }]
   })`);
   await evaluate("window.widgetTabsHarness.setWheelDelay(300)");
+  const dialogHasClose = `[...document.querySelectorAll('[role="dialog"] button')].some((b) => b.textContent?.trim() === 'Close')`;
   await clickWheelEntry();
+  await waitFor(dialogHasClose, true, "Close available before spinning");
   await clickDialog("Spin for 1 point");
   await waitFor("document.body.innerText.includes('Spinning')", true);
+  await waitFor(dialogHasClose, false, "Close hidden while the request is in flight");
+  await waitFor("document.body.innerText.includes('Won 5 min')", true, "reveal after request");
+  await waitFor(dialogHasClose, true, "Close returns once revealed");
+  const refreshAfterSettle = await evaluate<number>("window.widgetTabsHarness.refreshCalls");
   await click("Close");
-  await waitFor("Boolean(document.querySelector('[role=\"dialog\"]'))", false, "close during request");
-  const refreshAfterClose = await evaluate<number>("window.widgetTabsHarness.refreshCalls");
-  await waitFor(`window.widgetTabsHarness.refreshCalls > ${refreshAfterClose}`, true, "refresh after request completes");
+  await waitFor("Boolean(document.querySelector('[role=\"dialog\"]'))", false, "close after reveal");
+  await waitFor(`window.widgetTabsHarness.refreshCalls > ${refreshAfterSettle}`, true, "refresh on close");
+
+  // -- Password confirmation (ADR-0088). Failure paths first. ---------------
+  await evaluate("window.widgetTabsHarness.setWheelDelay(0)");
+  const singleStep = `{
+    seconds_won: 300, points_won_centi: 0, free_spins_triggered: 0,
+    segments: [{ label: '5 min', seconds: 300, points_centi: 0, free_spin: false }],
+    steps: [{ segment_index: 0, label: '5 min', seconds: 300, points_centi: 0, free_spin: false }]
+  }`;
+  const freeSpinChain = `{
+    seconds_won: 300, points_won_centi: 0, free_spins_triggered: 1,
+    segments: [
+      { label: '5 min', seconds: 300, points_centi: 0, free_spin: false },
+      { label: 'Free spin', seconds: 0, points_centi: 0, free_spin: true }
+    ],
+    steps: [
+      { segment_index: 1, label: 'Free spin', seconds: 0, points_centi: 0, free_spin: true },
+      { segment_index: 0, label: '5 min', seconds: 300, points_centi: 0, free_spin: false }
+    ]
+  }`;
+  await evaluate(`window.widgetTabsHarness.setWheelResult(${singleStep})`);
+
+  // Throttled: the server's lockout message is shown, the prompt stays, and the
+  // field is cleared.
+  await evaluate("window.widgetTabsHarness.setWheelPassword({ settings: true, server: 'hunter2' })");
+  await evaluate("window.widgetTabsHarness.setWheelThrottle(30)");
+  await openWheelDialog();
+  await clickDialog("Spin for 1 point");
+  await waitFor(hasPasswordField, true, "prompt before throttle");
+  await typePassword("hunter2");
+  await clickDialog("Spin for 1 point");
+  await waitFor(`(${dialogText}).includes('Please wait 30 seconds')`, true, "throttle message");
+  await waitFor(hasPasswordField, true, "prompt stays while throttled");
+  await waitFor("document.querySelector('#wheel-password').value", "", "field cleared after throttle");
+  await evaluate("window.widgetTabsHarness.setWheelThrottle(null)");
+  await closeWheelDialog();
+
+  // Stale settings: the client believes the setting is off, the server says
+  // otherwise. The first request goes out without a password and the
+  // password_required answer opens the prompt without an error.
+  await evaluate("window.widgetTabsHarness.setWheelPassword({ settings: false, server: 'hunter2' })");
+  await openWheelDialog();
+  let attempts = await evaluate<number>(`${spinPasswords}.length`);
+  await clickDialog("Spin for 1 point");
+  await waitFor(hasPasswordField, true, "prompt after password_required");
+  if ((await evaluate<number>(`${spinPasswords}.length`)) !== attempts + 1) throw new Error("Stale settings: expected exactly one passwordless request");
+  if ((await evaluate<string | undefined>(`${spinPasswords}.at(-1)`)) !== undefined) throw new Error("Stale settings: first request carried a password");
+  if ((await evaluate<string>(dialogText)).includes("Incorrect")) throw new Error("password_required must not show a wrong-password error");
+  await typePassword("hunter2");
+  await clickDialog("Spin for 1 point");
+  await waitFor("document.body.innerText.includes('Won 5 min!')", true, "win after stale-settings prompt");
+  await closeWheelDialog();
+
+  // Wrong password: error shown, field cleared, retry allowed, no result.
+  await evaluate("window.widgetTabsHarness.setWheelPassword({ settings: true, server: 'hunter2' })");
+  await openWheelDialog();
+  attempts = await evaluate<number>(`${spinPasswords}.length`);
+  await clickDialog("Spin for 1 point");
+  await waitFor(hasPasswordField, true, "prompt when setting is on");
+  if ((await evaluate<number>(`${spinPasswords}.length`)) !== attempts) throw new Error("Prompt must appear before any request is sent");
+  await typePassword("nope");
+  await clickDialog("Spin for 1 point");
+  await waitFor(`(${dialogText}).includes('Incorrect password')`, true, "wrong-password error");
+  await waitFor("document.querySelector('#wheel-password').value", "", "field cleared after wrong password");
+  if ((await evaluate<string>(dialogText)).includes("Won")) throw new Error("Wrong password must not produce a result");
+  await saveScreenshot("wheel-password-error.png");
+
+  // Retry with the correct password: the wheel spins and the result shows.
+  await typePassword("hunter2");
+  await clickDialog("Spin for 1 point");
+  await waitFor("document.body.innerText.includes('Won 5 min!')", true, "win after correct password");
+  await waitFor(hasPasswordField, false, "prompt closes after success");
+  if ((await evaluate<string[]>(`${spinPasswords}.slice(-2)`)).join() !== "nope,hunter2") throw new Error("Unexpected password attempts");
+  await saveScreenshot("wheel-password-success.png");
+
+  // A second paid spin asks again.
+  await clickDialog("Spin Again");
+  await waitFor(hasPasswordField, true, "prompt for the next paid spin");
+  await closeWheelDialog();
+
+  // Setting off: Spin goes straight to the request, no prompt, no password.
+  await evaluate("window.widgetTabsHarness.setWheelPassword({ settings: false, server: null })");
+  await openWheelDialog();
+  attempts = await evaluate<number>(`${spinPasswords}.length`);
+  await clickDialog("Spin for 1 point");
+  await waitFor("document.body.innerText.includes('Won 5 min!')", true, "win with confirmation off");
+  if (await evaluate<boolean>(hasPasswordField)) throw new Error("Prompt appeared with the setting off");
+  if ((await evaluate<string | undefined>(`${spinPasswords}.at(-1)`)) !== undefined || (await evaluate<number>(`${spinPasswords}.length`)) !== attempts + 1) {
+    throw new Error("Setting off: expected one request without a password");
+  }
+  await closeWheelDialog();
+
+  // Free-spin chain: one prompt for the paid spin, "Spin again" never asks.
+  await evaluate("window.widgetTabsHarness.setWheelPassword({ settings: true, server: 'hunter2' })");
+  await evaluate(`window.widgetTabsHarness.setWheelResult(${freeSpinChain})`);
+  await openWheelDialog();
+  attempts = await evaluate<number>(`${spinPasswords}.length`);
+  await clickDialog("Spin for 1 point");
+  await waitFor(hasPasswordField, true, "prompt for the chain's paid spin");
+  await typePassword("hunter2");
+  await clickDialog("Spin for 1 point");
+  await waitFor("document.body.innerText.includes('Free Spin!')", true, "free-spin landing with password");
+  await click("Spin again");
+  await waitFor("document.body.innerText.includes('Won 5 min!')", true, "chain's second landing");
+  if (await evaluate<boolean>(hasPasswordField)) throw new Error("Free-spin chain prompted for a password");
+  if ((await evaluate<number>(`${spinPasswords}.length`)) !== attempts + 1) throw new Error("Free-spin chain sent an extra request");
+  await closeWheelDialog();
 
   console.log("GREEN: Wheel browser tests passed");
 } finally {

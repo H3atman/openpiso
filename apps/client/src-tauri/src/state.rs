@@ -381,6 +381,9 @@ pub struct WheelSettings {
     pub point_value_seconds: i64,
     pub house_edge_basis_points: i64,
     pub unsafe_house_edge: bool,
+    /// ADR-0088: the customer re-enters their password for each paid spin.
+    #[serde(default)]
+    pub password_confirmation_required: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

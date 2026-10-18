@@ -26,6 +26,14 @@
     setFlavor: (flavor: "account" | "guest") => Promise<void>;
     setWheelDelay: (milliseconds: number) => void;
     setWheelResult: (result: WheelSpinResult) => void;
+    /** `settings` is what `/api/wheel/settings` reports; `server` is the
+     *  password the mock server really demands (null = not enforced). They
+     *  differ to model stale client settings (ADR-0088). */
+    setWheelPassword: (config: { settings: boolean; server: string | null }) => void;
+    /** While set, every spin is rejected as throttled for this many seconds. */
+    setWheelThrottle: (seconds: number | null) => void;
+    /** Password argument of each `spin_wheel` call, in order. */
+    readonly spinPasswords: (string | undefined)[];
     /** Worst-case Time tab: last-call banner + coin-feedback line together. */
     setLastCall: (active: boolean) => Promise<void>;
     emitCoinFeedback: () => Promise<void>;
@@ -42,6 +50,10 @@
   let authenticationRequests = 0;
   let refreshCalls = 0;
   let wheelDelayMs = 0;
+  let wheelSettingsPasswordRequired = false;
+  let wheelServerPassword: string | null = null;
+  let wheelThrottleSeconds: number | null = null;
+  const spinPasswords: (string | undefined)[] = [];
   const wheelSegments = [
     { label: "5 min", seconds: 300, points_centi: 0, free_spin: false },
     { label: "10 min", seconds: 600, points_centi: 0, free_spin: false },
@@ -152,9 +164,24 @@
         point_value_seconds: 1440,
         house_edge_basis_points: 8478,
         unsafe_house_edge: false,
+        password_confirmation_required: wheelSettingsPasswordRequired,
       };
     }
     if (command === "spin_wheel") {
+      const password = args && typeof args === "object" && "password" in args && typeof args.password === "string"
+        ? args.password
+        : undefined;
+      spinPasswords.push(password);
+      // The Rust command rejects with the server's body text.
+      if (wheelThrottleSeconds !== null) {
+        return Promise.reject(`too many attempts; try again in ${wheelThrottleSeconds}s`);
+      }
+      if (wheelServerPassword !== null && password === undefined) {
+        return Promise.reject(JSON.stringify({ error: "password_required" }));
+      }
+      if (wheelServerPassword !== null && password !== wheelServerPassword) {
+        return Promise.reject(JSON.stringify({ error: "invalid_password" }));
+      }
       return wheelDelayMs > 0
         ? new Promise<WheelSpinResult>((resolve) => setTimeout(() => resolve(wheelSpinResult), wheelDelayMs))
         : wheelSpinResult;
@@ -211,6 +238,16 @@
     },
     setWheelResult(result) {
       wheelSpinResult = result;
+    },
+    setWheelPassword(config) {
+      wheelSettingsPasswordRequired = config.settings;
+      wheelServerPassword = config.server;
+    },
+    setWheelThrottle(seconds) {
+      wheelThrottleSeconds = seconds;
+    },
+    get spinPasswords() {
+      return spinPasswords;
     },
     async setLastCall(active) {
       timer = {

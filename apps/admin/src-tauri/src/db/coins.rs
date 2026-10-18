@@ -288,6 +288,7 @@ pub async fn record_coin_event(
             | AppError::AttendanceInvalidInput(_)
             | AppError::AttendanceNotFound
             | AppError::AttendanceClaimDenied { .. }
+            | AppError::SpinPasswordRejected(_)
             | AppError::UnsupportedMigrationHistory(_) => None,
         };
         if let Some(reason) = reason {
