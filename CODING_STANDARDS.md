@@ -3,7 +3,16 @@
 ## Frontend
 
 - Keep components UI-only. Put API calls in `src/lib/api.ts`, shared types in `src/lib/types.ts`, and formatting in `src/lib/format.ts` within each app.
-- Use the existing state-management approach rather than adding a state-management library.
+- Do not add a state-management library. In `apps/client`, hand-rolled state machines (below) are the state-management approach; elsewhere use the existing approach.
+
+### Client UI state (apps/client)
+
+Any new or edited client UI flow must be a state machine ([ADR-0089](docs/adr/0089-client-ui-state-machines.md)):
+
+- Discriminated-union `State` and `Event` types, and a pure `reduce(state, event): State` with an exhaustive `switch` (`never` check) and no I/O.
+- Side effects (Tauri `invoke`, `api.ts` calls, timers) live in a thin runner that owns a `$state` holding the machine state and dispatches result events.
+- Machine modules are plain `.ts` under `src/lib/machines/`, not inside components.
+- No ad-hoc `$state` booleans or request counters for flow state.
 
 ## Rust
 
