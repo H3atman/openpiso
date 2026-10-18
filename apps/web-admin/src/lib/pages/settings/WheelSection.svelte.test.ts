@@ -20,6 +20,7 @@ function wheel(shopRatePointValueSeconds: number): WheelSettings {
     bokya_rate_basis_points: null,
     free_spin_cap: 0,
     spin_duration: 5,
+    password_confirmation_required: false,
     version: 1,
     segments: [
       { label: "Prize", seconds: 300, points_centi: 0, free_spin: false, probability_basis_points: 5000 },

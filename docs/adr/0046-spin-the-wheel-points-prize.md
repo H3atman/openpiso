@@ -5,6 +5,7 @@
 - Deciders: shop owner (product)
 - Supersedes: [ADR-0012](0012-spin-the-wheel.md) (in part: the "never points" prize rule)
 - Amends: [ADR-0003](0003-points-economy.md) (wheel prizes now include points)
+- Amended by: [ADR-0088](0088-spin-password-confirmation.md) (paid spins can require Account password confirmation)
 
 ## Context
 

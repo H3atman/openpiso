@@ -327,6 +327,7 @@ export interface WheelSettings {
   bokya_rate_basis_points: number | null;
   free_spin_cap: number;
   spin_duration: number;
+  password_confirmation_required: boolean;
   version: number;
   segments: OwnerWheelSegmentRow[];
   expected_payout_seconds: number;
@@ -344,6 +345,7 @@ export interface WheelSettingsInput {
   bokya_rate_basis_points: number | null;
   free_spin_cap: number;
   spin_duration: number;
+  password_confirmation_required: boolean;
   segments: WheelSegmentRow[];
 }
 

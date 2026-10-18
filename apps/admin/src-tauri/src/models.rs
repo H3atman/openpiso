@@ -878,6 +878,8 @@ pub struct WheelSettings {
     pub bokya_rate_basis_points: Option<i64>,
     pub free_spin_cap: i64,
     pub spin_duration: i64,
+    /// Spin Password Confirmation: spins require the Account's password.
+    pub password_confirmation_required: bool,
     pub version: i64,
     pub segments: Vec<OwnerWheelSegmentRow>,
     pub expected_payout_seconds: i64,
@@ -898,6 +900,7 @@ pub struct ClientWheelSettings {
     pub enabled: bool,
     pub free_spin_cap: i64,
     pub spin_duration: i64,
+    pub password_confirmation_required: bool,
     pub version: i64,
     pub segments: Vec<WheelSegmentRow>,
     pub expected_payout_seconds: i64,
@@ -913,6 +916,9 @@ pub struct WheelSettingsInput {
     pub bokya_rate_basis_points: Option<i64>,
     pub free_spin_cap: i64,
     pub spin_duration: i64,
+    /// Defaults off so an older web-admin save body stays valid.
+    #[serde(default)]
+    pub password_confirmation_required: bool,
     pub segments: Vec<WheelSegmentRow>,
 }
 

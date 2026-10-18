@@ -173,8 +173,29 @@ export function redeemPoints(tierId: number, version: number): Promise<AccountAu
   return invoke<AccountAuth>("redeem_points", { tierId, version });
 }
 
-export function spinWheel(): Promise<WheelSpinResult> {
-  return invoke<WheelSpinResult>("spin_wheel");
+/**
+ * `password` is sent only when the customer was prompted (ADR-0088). Rejects
+ * with an `Error` whose message is the server's raw error code or text
+ * (`password_required`, `invalid_password`, a throttle message, ...); the spin
+ * machine classifies it.
+ */
+export async function spinWheel(password?: string): Promise<WheelSpinResult> {
+  try {
+    return await invoke<WheelSpinResult>("spin_wheel", { password });
+  } catch (caught) {
+    // The command rejects with the server's body text, e.g. {"error":"invalid_password"}.
+    const text = caught instanceof Error ? caught.message : String(caught);
+    let code = text;
+    try {
+      const body: unknown = JSON.parse(text);
+      if (typeof body === "object" && body !== null && "error" in body && typeof body.error === "string") {
+        code = body.error;
+      }
+    } catch {
+      // Not JSON: the text itself is the message.
+    }
+    throw new Error(code);
+  }
 }
 
 export function getWheelEnabled(): Promise<boolean> {

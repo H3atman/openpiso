@@ -95,6 +95,7 @@ fn wheel_settings_view(
     config: &WheelConfig,
     version: i64,
     spin_duration: i64,
+    password_confirmation_required: bool,
     tier: crate::models::RedemptionTier,
     shop_rate_point_value_seconds: i64,
 ) -> AppResult<WheelSettings> {
@@ -123,6 +124,7 @@ fn wheel_settings_view(
         bokya_rate_basis_points: config.bokya_rate_basis_points,
         free_spin_cap: config.free_spin_cap,
         spin_duration,
+        password_confirmation_required,
         version,
         segments,
         expected_payout_seconds: config.expected_payout_seconds().round() as i64,
@@ -134,6 +136,16 @@ fn wheel_settings_view(
         shop_rate_house_edge_basis_points,
         unsafe_shop_rate_house_edge: shop_rate_house_edge_basis_points <= 0,
     })
+}
+
+/// Whether `POST /api/wheel/spin` must see the Account's password.
+pub async fn wheel_password_confirmation_required(pool: &SqlitePool) -> AppResult<bool> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT password_confirmation_required FROM wheel_settings WHERE id = 1",
+    )
+    .fetch_one(pool)
+    .await?
+        == 1)
 }
 
 pub async fn wheel_enabled(pool: &SqlitePool) -> AppResult<bool> {
@@ -162,10 +174,11 @@ pub async fn wheel_settings(pool: &SqlitePool) -> AppResult<WheelSettings> {
     let mut transaction = super::begin_immediate(pool).await?;
     let (config, version) = load_wheel_config(&mut transaction).await?;
     config.validate().map_err(wheel_error_to_app)?;
-    let spin_duration: i64 =
-        sqlx::query_scalar("SELECT spin_duration FROM wheel_settings WHERE id = 1")
-            .fetch_one(&mut *transaction)
-            .await?;
+    let (spin_duration, password_confirmation_required) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT spin_duration, password_confirmation_required FROM wheel_settings WHERE id = 1",
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
     let tier =
         super::redemption_tiers::most_generous_redemption_tier_in_transaction(&mut transaction)
             .await?;
@@ -175,6 +188,7 @@ pub async fn wheel_settings(pool: &SqlitePool) -> AppResult<WheelSettings> {
         &config,
         version,
         spin_duration,
+        password_confirmation_required == 1,
         tier,
         shop_rate_point_value_seconds,
     )?;
@@ -188,6 +202,7 @@ pub async fn client_wheel_settings(pool: &SqlitePool) -> AppResult<ClientWheelSe
         enabled: settings.enabled,
         free_spin_cap: settings.free_spin_cap,
         spin_duration: settings.spin_duration,
+        password_confirmation_required: settings.password_confirmation_required,
         version: settings.version,
         segments: settings
             .segments
@@ -241,6 +256,7 @@ pub async fn update_wheel_settings(
     let version = sqlx::query_scalar::<_, i64>(
         "UPDATE wheel_settings
          SET enabled = ?, bokya_rate_basis_points = ?, free_spin_cap = ?, spin_duration = ?,
+             password_confirmation_required = ?,
              version = version + 1, updated_at = CURRENT_TIMESTAMP
          WHERE id = 1
          RETURNING version",
@@ -249,6 +265,7 @@ pub async fn update_wheel_settings(
     .bind(input.bokya_rate_basis_points)
     .bind(input.free_spin_cap)
     .bind(input.spin_duration)
+    .bind(i64::from(input.password_confirmation_required))
     .fetch_one(&mut *transaction)
     .await?;
 
@@ -284,6 +301,7 @@ pub async fn update_wheel_settings(
         "bokya_rate_basis_points": input.bokya_rate_basis_points,
         "free_spin_cap": input.free_spin_cap,
         "spin_duration": input.spin_duration,
+        "password_confirmation_required": input.password_confirmation_required,
         "version": version,
         "house_edge_basis_points": house_edge_basis_points,
         "segment_count": input.segments.len()
@@ -806,6 +824,7 @@ mod tests {
             bokya_rate_basis_points: None,
             free_spin_cap: 0,
             spin_duration: 5,
+            password_confirmation_required: false,
             segments: vec![
                 WheelSegmentRow {
                     label: "1 hour".into(),
@@ -845,6 +864,7 @@ mod tests {
             bokya_rate_basis_points: Some(5_000),
             free_spin_cap: 0,
             spin_duration: 9,
+            password_confirmation_required: false,
             segments: vec![WheelSegmentRow {
                 label: "Winner".into(),
                 seconds: 60,
@@ -941,6 +961,7 @@ mod tests {
                 bokya_rate_basis_points: unsafe_settings.bokya_rate_basis_points,
                 free_spin_cap: unsafe_settings.free_spin_cap,
                 spin_duration: unsafe_settings.spin_duration,
+                password_confirmation_required: unsafe_settings.password_confirmation_required,
                 segments: unsafe_settings
                     .segments
                     .iter()
@@ -976,6 +997,7 @@ mod tests {
             bokya_rate_basis_points: Some(7_500),
             free_spin_cap: 2,
             spin_duration: 5,
+            password_confirmation_required: true,
             segments: vec![
                 WheelSegmentRow {
                     label: "2 minutes".into(),
@@ -1003,6 +1025,7 @@ mod tests {
         assert_eq!(settings.bokya_rate_basis_points, Some(7_500));
         assert_eq!(settings.free_spin_cap, 2);
         assert_eq!(settings.spin_duration, 5);
+        assert!(settings.password_confirmation_required);
         assert_eq!(settings.version, 2);
         assert_eq!(
             settings
@@ -1039,6 +1062,7 @@ mod tests {
                 bokya_rate_basis_points: None,
                 free_spin_cap: 1,
                 spin_duration,
+                password_confirmation_required: false,
                 segments: vec![WheelSegmentRow {
                     label: "Nothing".into(),
                     seconds: 0,
@@ -1066,6 +1090,7 @@ mod tests {
             bokya_rate_basis_points: Some(0),
             free_spin_cap: 0,
             spin_duration: 5,
+            password_confirmation_required: false,
             segments: vec![WheelSegmentRow {
                 label: "2 points".into(),
                 seconds: 0,

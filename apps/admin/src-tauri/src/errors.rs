@@ -31,6 +31,10 @@ pub enum AppError {
     AttendanceSettingsConflict { current_version: i64 },
     #[error("unauthorized")]
     AttendanceUnauthorized,
+    /// Spin Password Confirmation rejection (ADR-0088): `password_required`
+    /// or `invalid_password`, returned as a JSON `error` code.
+    #[error("{0}")]
+    SpinPasswordRejected(&'static str),
     #[error("invalid input: {0}")]
     AttendanceInvalidInput(String),
     #[error("attendance month not found")]
@@ -90,9 +94,9 @@ impl IntoResponse for AppError {
             AppError::InvalidInput(_) | AppError::AttendanceInvalidInput(_) => {
                 StatusCode::BAD_REQUEST
             }
-            AppError::Unauthorized(_) | AppError::AttendanceUnauthorized => {
-                StatusCode::UNAUTHORIZED
-            }
+            AppError::Unauthorized(_)
+            | AppError::AttendanceUnauthorized
+            | AppError::SpinPasswordRejected(_) => StatusCode::UNAUTHORIZED,
             AppError::ShopClosed
             | AppError::Conflict(_)
             | AppError::AttendanceSettingsConflict { .. }
@@ -139,6 +143,9 @@ impl IntoResponse for AppError {
                 })),
             )
                 .into_response();
+        }
+        if let AppError::SpinPasswordRejected(code) = &self {
+            return (status, axum::Json(serde_json::json!({ "error": code }))).into_response();
         }
         if matches!(&self, AppError::AttendanceUnauthorized) {
             return (

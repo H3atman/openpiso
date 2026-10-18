@@ -85,6 +85,14 @@ struct PointsRedeemRequest {
     version: i64,
 }
 
+/// Body of `POST /api/wheel/spin` (ADR-0088). `password` is omitted when the
+/// customer was not prompted; the server decides whether it is required.
+#[derive(Serialize)]
+struct WheelSpinRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+}
+
 #[derive(Serialize)]
 struct TransferTimeRequest<'a> {
     to_username: &'a str,
@@ -641,7 +649,10 @@ pub async fn redeem_points(
 }
 
 #[tauri::command]
-pub async fn spin_wheel(state: State<'_, AppState>) -> Result<WheelSpinResult, String> {
+pub async fn spin_wheel(
+    state: State<'_, AppState>,
+    password: Option<String>,
+) -> Result<WheelSpinResult, String> {
     let auth = state
         .shared
         .account_auth
@@ -657,6 +668,7 @@ pub async fn spin_wheel(state: State<'_, AppState>) -> Result<WheelSpinResult, S
             reqwest::header::AUTHORIZATION,
             format!("Bearer {}", auth.token),
         )
+        .json(&WheelSpinRequest { password })
         .send()
         .await
         .map_err(|error| transport_error("wheel spin", &error))?;

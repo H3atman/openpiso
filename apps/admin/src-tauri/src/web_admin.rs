@@ -8807,7 +8807,7 @@ mod tests {
     async fn app_update_install_requires_offered_version_and_schema_acknowledgement() {
         let mut state = test_state().await;
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-            std::sync::Mutex::new(Ok(vec![update_release("0.13.0", 59)])),
+            std::sync::Mutex::new(Ok(vec![update_release("0.13.0", 60)])),
         ));
         let address = spawn(state.clone()).await;
         let client = reqwest::Client::new();
@@ -8864,9 +8864,9 @@ mod tests {
         let mut state = test_state().await;
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                update_release("0.11.4", 58),
+                update_release("0.11.4", 59),
                 update_release("0.11.3", 57),
-                update_release("0.12.0", 58),
+                update_release("0.12.0", 59),
             ])),
         ));
         let address = spawn(state.clone()).await;
@@ -9016,7 +9016,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("data directory");
             let mut state = test_state_in(dir.path()).await;
             state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-                std::sync::Mutex::new(Ok(vec![update_release(version, 58)])),
+                std::sync::Mutex::new(Ok(vec![update_release(version, 59)])),
             ));
             state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
                 fail_prepare: true,
@@ -9087,7 +9087,7 @@ mod tests {
         for fail_prepare in [true, false] {
             let mut state = test_state().await;
             state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-                std::sync::Mutex::new(Ok(vec![update_release(&newer, 58)])),
+                std::sync::Mutex::new(Ok(vec![update_release(&newer, 59)])),
             ));
             state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
                 fail_prepare,
@@ -9161,7 +9161,7 @@ mod tests {
             ..Default::default()
         });
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-            std::sync::Mutex::new(Ok(vec![update_release(&newer, 58)])),
+            std::sync::Mutex::new(Ok(vec![update_release(&newer, 59)])),
         ));
         let address = spawn(state.clone()).await;
         let client = reqwest::Client::new();
@@ -9259,14 +9259,14 @@ mod tests {
         };
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                release(&newer, 58),
-                release("0.0.0", 58),
+                release(&newer, 59),
+                release("0.0.0", 59),
                 release(&older, 57),
-                release(&newest, 59),
-                release(&older, 58),
+                release(&newest, 60),
                 release(&older, 59),
-                release(&preview, 58),
-                release(env!("CARGO_PKG_VERSION"), 58),
+                release(&older, 60),
+                release(&preview, 59),
+                release(env!("CARGO_PKG_VERSION"), 59),
             ])),
         ));
         let address = spawn(state).await;
@@ -9283,7 +9283,7 @@ mod tests {
         assert_eq!(body["available"]["version"], newest);
         assert_eq!(body["available"]["raisesSchema"], true);
         assert_eq!(body["available"]["notes"], format!("Notes for {newest}"));
-        assert_eq!(body["available"]["schemaVersion"], 59);
+        assert_eq!(body["available"]["schemaVersion"], 60);
         assert!(body["lastCheckedAt"].is_string());
         let versions: Vec<_> = body["rollbacks"]
             .as_array()
@@ -9454,7 +9454,7 @@ mod tests {
             .route("/{tag}/release.json", get(|Path(tag): Path<String>| async move {
                 Json(serde_json::json!({
                     "version": tag.trim_start_matches('v'),
-                    "schema_version": if tag == "v0.13.0" { 59 } else { 58 },
+                    "schema_version": if tag == "v0.13.0" { 60 } else { 59 },
                     "notes": "Owner-facing release notes",
                     "pub_date": "2026-10-13T00:00:00Z",
                 }))
@@ -9622,7 +9622,7 @@ mod tests {
             .await
             .expect("JSON");
         assert_eq!(stored, failed);
-        *feed.0.lock().expect("feed") = Ok(vec![update_release(&newer, 58)]);
+        *feed.0.lock().expect("feed") = Ok(vec![update_release(&newer, 59)]);
         let successful: serde_json::Value = client
             .post(&url)
             .owner(&auth)
@@ -9715,7 +9715,7 @@ mod tests {
         let mut state = test_state().await;
         // Deliberately differ from the binary's migration constant: the route
         // must read the applied database history, not the build's known maximum.
-        sqlx::query("INSERT INTO _openpiso_migrations (version) VALUES (59)")
+        sqlx::query("INSERT INTO _openpiso_migrations (version) VALUES (60)")
             .execute(&state.pool)
             .await
             .expect("applied schema fixture");
@@ -9731,10 +9731,10 @@ mod tests {
         };
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                release(&newer, 59),
+                release(&newer, 60),
+                release(&older, 60),
                 release(&older, 59),
-                release(&older, 58),
-                release(&current_build, 59),
+                release(&current_build, 60),
             ])),
         ));
         let address = spawn(state).await;
@@ -9749,7 +9749,7 @@ mod tests {
             .json()
             .await
             .expect("JSON");
-        assert_eq!(body["currentSchemaVersion"], 59);
+        assert_eq!(body["currentSchemaVersion"], 60);
         assert_eq!(body["available"]["version"], newer);
         assert_eq!(body["available"]["raisesSchema"], false);
         let rollbacks = body["rollbacks"].as_array().expect("rollbacks");

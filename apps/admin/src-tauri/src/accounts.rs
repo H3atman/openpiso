@@ -181,6 +181,39 @@ pub async fn active_username_normalized(
     Ok(active)
 }
 
+/// Normalized Username of an active Account, used to key the shared Account
+/// login throttle for session-bound password checks (Spin Password
+/// Confirmation). A missing or deleted Account is an invalid session.
+pub async fn active_username_normalized_by_id(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> AppResult<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT username_normalized FROM accounts WHERE id = ? AND status = 'active'",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::Unauthorized("invalid or revoked account token".to_owned()))
+}
+
+/// Whether `password` matches an active Account's stored credential. Read-only:
+/// no audit row, no credential upgrade (unlike login).
+pub async fn active_account_password_matches(
+    pool: &SqlitePool,
+    account_id: &str,
+    password: &str,
+) -> AppResult<bool> {
+    let stored_hash = sqlx::query_scalar::<_, String>(
+        "SELECT password_hash FROM accounts WHERE id = ? AND status = 'active'",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::Unauthorized("invalid or revoked account token".to_owned()))?;
+    Ok(verify_password(password, &stored_hash))
+}
+
 /// Return the active Account ID for a normalized Username when it still
 /// resolves. Callers use this for canonical Audit Log attribution.
 async fn active_account_id_for_normalized_username(

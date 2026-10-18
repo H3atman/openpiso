@@ -2,12 +2,13 @@
   import { onDestroy, onMount } from "svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { Button } from "$lib/components/ui/button";
-  import type { AccountAuth, AttendanceSummary, ClientConfig, RedemptionTierMenu, ShopStatus, TimerState, ViewMode, WheelSegmentRow, WheelSpinResult } from "$lib/types";
+  import type { AccountAuth, AttendanceSummary, ClientConfig, RedemptionTierMenu, ShopStatus, TimerState, ViewMode } from "$lib/types";
   import { formatShopClosed } from "$lib/format";
   import { selectLockSurface, type LockSurfaceLeft } from "$lib/selectors";
-  import { accountLoginErrorMessage, claimGuestTime, connectToServer, disconnectFromServer, getWheelEnabled, getWheelSettings, loginAccount, logoutAccount, pauseOfflineShutdown, redeemPoints, redeemVoucher, resumeOfflineShutdown, setClientConfig, signUpAccount, spinWheel } from "$lib/api";
+  import { accountLoginErrorMessage, claimGuestTime, connectToServer, disconnectFromServer, getWheelEnabled, loginAccount, logoutAccount, pauseOfflineShutdown, redeemPoints, redeemVoucher, resumeOfflineShutdown, setClientConfig, signUpAccount } from "$lib/api";
   import { isStaleMenuError, loadSortedTierMenu } from "$lib/redemption";
   import AccountPanel from "$lib/components/AccountPanel.svelte";
+  import { createSpinMachine } from "$lib/machines/spin.svelte";
   import WheelDialog from "$lib/components/WheelDialog.svelte";
   import WheelEntry from "$lib/components/WheelEntry.svelte";
   import AuthForm from "$lib/components/AuthForm.svelte";
@@ -42,13 +43,13 @@
     onReturnToSession }: Props = $props();
 
   // -- Wheel state -------------------------------------------------------
-  let wheelOpen = $state(false);
   let wheelEnabled = $state(false);
-  let wheelSegments = $state<WheelSegmentRow[]>([]);
-  let wheelSpinDuration = $state(5);
-  let wheelSpinResult = $state<WheelSpinResult | null>(null);
-  let wheelSpinning = $state(false);
-  let wheelError = $state("");
+  // Shared with the Widget (ADR-0089).
+  const spin = createSpinMachine({
+    refresh: () => void refreshAccountAndTimer(),
+    onEnabled: (enabled) => (wheelEnabled = enabled),
+    onError: (message) => (actionError = message),
+  });
   let redemptionTierMenu = $state<RedemptionTierMenu | null>(null);
   let redemptionTiersLoading = $state(false);
   let redemptionTiersError = $state("");
@@ -124,28 +125,6 @@
   async function claim(): Promise<void> { actionError = ""; try { await claimGuestTime(); await refreshAccountAndTimer(); } catch (caught) { presentActionError(caught); } }
   async function voucher(code: string): Promise<boolean> { actionError = ""; try { await redeemVoucher(code); await refreshAccountAndTimer(); return true; } catch (caught) { presentActionError(caught); return false; } }
   async function points(tierId: number, version: number): Promise<void> { actionError = ""; try { await redeemPoints(tierId, version); await refreshAccountAndTimer(); } catch (caught) { if (isStaleMenuError(caught)) { await loadRedemptionTiers(); actionError = "Redemption Tiers changed. Menu refreshed; choose again."; } else { presentActionError(caught); } } }
-  async function openWheel(): Promise<void> {
-    if (wheelOpen || wheelSpinning) return;
-    wheelError = "";
-    wheelSpinResult = null;
-    try {
-      const settings = await getWheelSettings();
-      wheelEnabled = settings.enabled;
-      if (!settings.enabled) return;
-      wheelSegments = settings.segments;
-      wheelSpinDuration = settings.spin_duration;
-      wheelOpen = true;
-    } catch (caught) {
-      actionError = caught instanceof Error ? caught.message : String(caught);
-    }
-  }
-
-  function closeWheel(): void {
-    wheelOpen = false;
-    // Balance refresh on dialog close.
-    void refreshAccountAndTimer();
-  }
-
   async function refreshWheelEnabled(): Promise<void> {
     try {
       wheelEnabled = await getWheelEnabled();
@@ -160,23 +139,6 @@
     void refreshWheelEnabled();
   });
 
-  async function spinWheelRequest(): Promise<void> {
-    if (wheelSpinning) return;
-    wheelSpinning = true;
-    wheelError = "";
-    try {
-      wheelSpinResult = await spinWheel();
-      wheelSegments = wheelSpinResult.segments;
-      actionError = "";
-    } catch (caught) {
-      wheelError = caught instanceof Error ? caught.message : String(caught);
-    } finally {
-      wheelSpinning = false;
-      // Refresh even while the dialog is open: the post-spin balance decides
-      // whether another spin is affordable ("Spin Again" vs "Close").
-      void refreshAccountAndTimer();
-    }
-  }
   async function logout(): Promise<void> { actionError = ""; try { await logoutAccount(); onAuthLoggedOut(); await refreshAccountAndTimer(); } catch (caught) { presentActionError(caught); } }
   async function saveAndConnect(serverUrl: string): Promise<void> { const response = await setClientConfig(serverUrl, config?.view_mode ?? "widget"); onConfigChanged(response.config); onPersistWarning(response.persist_warning ?? ""); await connectToServer(); await onTimerChanged(); }
   async function disconnect(): Promise<void> { await disconnectFromServer(); await onTimerChanged(); }
@@ -230,7 +192,7 @@
     {#if error}<div class="mt-4"><Banner kind="error">{error}</Banner></div>{/if}
     <div class="flex flex-1 flex-col justify-start gap-6 py-8 lg:justify-center">
       {#if accountAuth}
-        <AccountPanel {accountAuth} {busy} error={actionError} {shopClosed} {attendanceSummary} {attendanceSupported} {attendanceStale} {attendanceClaimingMonth} {attendanceClaimError} {onClaimAttendanceMonth} {redemptionTierMenu} {redemptionTiersLoading} {redemptionTiersError} {wheelEnabled} onClaim={claim} onRedeemVoucher={voucher} onRefreshRedemptionTiers={loadRedemptionTiers} onRedeemPoints={points} onOpenWheel={openWheel} onLogout={logout} onAuthenticate={authenticate} onSwitchMode={() => authError = ""} />
+        <AccountPanel {accountAuth} {busy} error={actionError} {shopClosed} {attendanceSummary} {attendanceSupported} {attendanceStale} {attendanceClaimingMonth} {attendanceClaimError} {onClaimAttendanceMonth} {redemptionTierMenu} {redemptionTiersLoading} {redemptionTiersError} {wheelEnabled} onClaim={claim} onRedeemVoucher={voucher} onRefreshRedemptionTiers={loadRedemptionTiers} onRedeemPoints={points} onOpenWheel={spin.open} onLogout={logout} onAuthenticate={authenticate} onSwitchMode={() => authError = ""} />
         {#if !shopClosed && switchAccount}<div class="rounded-lg border border-primary/30 p-4"><div class="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h3 class="font-bold">Switch account</h3><p class="mt-1 text-sm text-amber-700 dark:text-amber-200">The current Active Session will be replaced when you log in or sign up.</p></div><Button type="button" variant="ghost" onclick={() => { switchAccount = false; authError = ""; }}>Cancel</Button></div><AuthForm {busy} error={authError} onAuthenticate={authenticate} onSwitchMode={() => authError = ""} /></div>
         {:else if !shopClosed}<Button type="button" variant="outline" onclick={() => switchAccount = true}>Switch account</Button>{/if}
       {:else if shopClosed}
@@ -248,7 +210,7 @@
         <AuthForm {busy} error={authError} disabled={Boolean(unavailableReason)} disabledReason={unavailableReason} onAuthenticate={authenticate} onSwitchMode={() => authError = ""} />
         <div class="flex items-center gap-3 text-xs font-bold tracking-widest text-muted-foreground/60 uppercase"><span class="h-px flex-1 bg-border"></span>or<span class="h-px flex-1 bg-border"></span></div>
         <p class="text-center text-sm text-muted-foreground">Select <span class="font-mono text-foreground">{pcName}</span>, insert coin to login as guest</p>
-        <WheelEntry {accountAuth} {busy} {wheelEnabled} onOpen={openWheel} variant="card" />
+        <WheelEntry {accountAuth} {busy} {wheelEnabled} onOpen={spin.open} variant="card" />
       {/if}
     </div>
     <footer class="flex items-end justify-between gap-4 text-[.65rem] text-muted-foreground/70">
@@ -276,15 +238,12 @@
 {/if}
 
 <WheelDialog
-  open={wheelOpen}
-  segments={wheelSegments}
-  spinDuration={wheelSpinDuration}
-  spinResult={wheelSpinResult}
-  spinning={wheelSpinning}
-  error={wheelError}
+  spinState={spin.state}
   pointsBalanceCenti={accountAuth?.account.points_balance_centi ?? 0}
-  onSpin={spinWheelRequest}
-  onClose={closeWheel}
+  onSpin={spin.spin}
+  onSubmitPassword={spin.submitPassword}
+  onNextFreeSpin={spin.nextFreeSpin}
+  onClose={spin.close}
 />
 
 <style>

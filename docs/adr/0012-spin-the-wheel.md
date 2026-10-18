@@ -21,6 +21,10 @@
 > segment/probability editor as a still-open question are closed by removal. The
 > house-edge invariant itself is unchanged, but is now enforced on the spin path
 > as well as on save.
+>
+> **Amended by [ADR-0088](0088-spin-password-confirmation.md):** when the owner
+> enables it, a paid spin must carry the Account's password, verified by the
+> server before the point is charged. Free spins in a chain never prompt.
 
 ## Context
 
