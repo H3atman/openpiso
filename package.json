@@ -2,7 +2,7 @@
   "name": "openpiso",
   "private": true,
   "license": "PolyForm-Shield-1.0.0",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "type": "module",
   "workspaces": [
     "apps/*",
