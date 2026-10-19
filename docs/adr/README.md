@@ -95,7 +95,7 @@ deliberately relax MVP constraints.
 
 | [0087](0087-source-available-license.md) | **Publish source under PolyForm Shield 1.0.0**: public, source-available (not OSI open source); shops may run their business; competing products, including resale as a substitute, are restricted. Supersedes ADR-0086 source privacy. |
 | [0088](0088-spin-password-confirmation.md) | **Spin Password Confirmation**: owner-toggled (off by default); each paid spin re-enters the Account password, verified by the server before the point is charged. Wrong attempts share the Account Login Throttle. Free spins in a chain never prompt. Amends ADR-0012 and ADR-0046. |
-| [0089](0089-client-ui-state-machines.md) | **Client UI state machines**: every new or edited `apps/client` flow is a discriminated-union State/Event with a pure exhaustive `reduce`, effects in a thin runner, machine in plain `.ts`. Hand-rolled, no library. |
+| [0089](0089-client-ui-state-machines.md) | **Client UI state machines**: every new or edited `apps/client` flow is a discriminated-union State/Event with a pure exhaustive `reduce`, effects in a thin runner, machine in plain `.ts`. Hand-rolled, no library. **Amended 2026-10-20:** Web Admin Login and Manual Adjustment opt in under `apps/web-admin/src/lib/machines/`; no blanket migration. |
 
 See also the [glossary](../glossary.md) for the ubiquitous language, the
 [coin acceptor characterization](../coin-acceptor-characterization.md) for the
