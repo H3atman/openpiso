@@ -27,6 +27,7 @@ vi.mock("../notifications", () => ({
 import { render, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import * as api from "../api";
+import { formatDate } from "../format";
 import { reportActionFailure, reportActionSuccess } from "../notifications";
 import type { Account } from "../types";
 import { createMatchMedia } from "../../test/match-media";
@@ -323,9 +324,9 @@ describe("AccountsPage visibility and sorting", () => {
     expect(card.getByText("Points")).toBeTruthy();
     expect(card.getByText("1.00")).toBeTruthy();
     expect(card.getByText("Account Created")).toBeTruthy();
-    expect(card.getByText(/Jan 1, 2025, 8:00 AM/)).toBeTruthy();
+    expect(card.getByText(formatDate("2025-01-01T00:00:00Z"))).toBeTruthy();
     expect(card.getByText("Last Login")).toBeTruthy();
-    expect(card.getByText(/Jan 2, 2025, 11:04 AM/)).toBeTruthy();
+    expect(card.getByText(formatDate("2025-01-02T03:04:00Z"))).toBeTruthy();
   });
 
   it("sorts every active column and keeps null Last Login values last", async () => {
