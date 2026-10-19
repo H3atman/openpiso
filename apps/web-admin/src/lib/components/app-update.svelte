@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, type Snippet } from "svelte";
+  import { mergeProps } from "bits-ui";
   import * as api from "../api";
   import type { AppUpdateState } from "../types";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
@@ -222,17 +223,21 @@
 {#snippet row()}
   <Sidebar.Menu>
     <Sidebar.MenuItem>
-      <Tooltip.Root>
+      <!-- Pointer-driven focus must not open the tooltip: closing the Sheet
+           returns focus to this row, which would reopen it and leave it
+           showing until blur. Keyboard focus still opens it. -->
+      <Tooltip.Root ignoreNonKeyboardFocus disableHoverableContent>
         <Tooltip.Trigger>
           {#snippet child({ props })}
             <Sidebar.MenuButton
-              {...props}
+              {...mergeProps(props, {
+                onclick: () => {
+                  sidebar.setOpenMobile(false);
+                  open = true;
+                },
+              })}
               aria-label={label}
               data-testid="app-update-row"
-              onclick={() => {
-                sidebar.setOpenMobile(false);
-                open = true;
-              }}
             >
               <DownloadIcon />
               <span>{label}</span>
