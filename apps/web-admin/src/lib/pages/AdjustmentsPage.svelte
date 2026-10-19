@@ -1,49 +1,49 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../api";
-  import { formatDuration, formatDate } from "../format";
-  import type { ManualAdjustment, Pc } from "../types";
+  import { formatDuration } from "../format";
   import { reportActionFailure, reportActionSuccess } from "../notifications";
+  import {
+    initialAdjustmentState,
+    reduceAdjustment,
+    type AdjustmentState,
+  } from "../machines/adjustment";
 
-  let pcs = $state<Pc[]>([]);
-  let adjustments = $state<ManualAdjustment[]>([]);
-  let error = $state("");
-  let busy = $state(false);
+  let current = $state.raw<AdjustmentState>(initialAdjustmentState);
 
   let pcId = $state("");
   let secondsDelta = $state(300);
   let reason = $state("");
-  let createBusy = $state(false);
 
   async function load() {
-    busy = true;
-    error = "";
     try {
       const dash = await api.getDashboard();
-      pcs = dash.pcs;
-      adjustments = []; // Manual adjustments endpoint not paginated; for now show empty
+      current = reduceAdjustment(current, { type: "loaded", pcs: dash.pcs });
     } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
-    } finally {
-      busy = false;
+      current = reduceAdjustment(current, {
+        type: "load-failed",
+        error: caught instanceof Error ? caught.message : String(caught),
+      });
     }
   }
 
   async function createAdjustment() {
     if (!pcId) return;
-    createBusy = true;
+    const next = reduceAdjustment(current, { type: "submit" });
+    if (next === current) return;
+    current = next;
     try {
       await api.createManualAdjustment({
         pc_id: pcId,
         seconds_delta: secondsDelta,
         reason: reason || null,
       });
-      await load();
       reportActionSuccess("create", "Manual Adjustment");
+      await load();
     } catch (caught) {
       reportActionFailure("create", "Manual Adjustment", caught);
     } finally {
-      createBusy = false;
+      current = reduceAdjustment(current, { type: "submit-finished" });
     }
   }
 
@@ -53,11 +53,14 @@
 <div class="space-y-6">
   <h2 class="text-2xl font-bold tracking-tight">Manual Adjustments</h2>
 
-  {#if busy}
+  {#if current.phase === "loading"}
     <div class="p-4 text-center text-sm text-muted-foreground">Loading…</div>
-  {:else if error}
-    <div class="rounded-md bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+  {:else if current.phase === "load-failed"}
+    <div class="rounded-md bg-destructive/10 p-4 text-sm text-destructive">{current.error}</div>
   {:else}
+  {#if current.error}
+    <div class="rounded-md bg-destructive/10 p-4 text-sm text-destructive">{current.error}</div>
+  {/if}
   <div class="rounded-lg border bg-card p-6">
     <h3 class="mb-4 text-lg font-semibold">Adjust Guest Time</h3>
     <div class="space-y-4">
@@ -65,7 +68,7 @@
         <label class="block text-sm font-medium" for="adjust-pc">PC</label>
         <select id="adjust-pc" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={pcId}>
           <option value="">Select PC…</option>
-          {#each pcs as pc (pc.id)}
+          {#each current.pcs as pc (pc.id)}
             <option value={pc.id}>{pc.name} ({formatDuration(pc.remaining_seconds)} remaining)</option>
           {/each}
         </select>
@@ -87,10 +90,10 @@
     <button
       class="mt-6 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
       type="button"
-      disabled={createBusy || !pcId}
+      disabled={current.submitting || !pcId}
       onclick={createAdjustment}
     >
-      {createBusy ? "Applying…" : "Apply Adjustment"}
+      {current.submitting ? "Applying…" : "Apply Adjustment"}
     </button>
   </div>
   {/if}

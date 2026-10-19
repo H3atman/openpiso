@@ -1,0 +1,45 @@
+# Lightweight Linux validation; installers and signing secrets stay in the tag-triggered release workflow.
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check all frontend workspaces
+        run: bun run check
+
+      - name: Test release helper
+        run: bun test scripts/prepare-release.test.ts
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+
+      # Keep this light: Tauri needs GTK/WebKit; Client real-command tests also need a display.
+      # Windows-only Guard adapters still need separate Windows verification.
+      - name: Test domain logic and portable Client Guard code
+        run: cargo test -p openpiso-core -p client-guard
