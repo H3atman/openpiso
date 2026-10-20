@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-18
-- Amended: 2026-10-20 — opt-in Web Admin adoption for Login and Manual Adjustment.
+- Amended: 2026-10-20 — opt-in Web Admin adoption (see Amendment).
 - Deciders: shop owner (product)
 - Relates to: [ADR-0005](0005-tamper-response-and-expiry-powraoff.md), [ADR-0088](0088-spin-password-confirmation.md)
 
@@ -33,6 +33,7 @@ Scope is `apps/client` only for now. Existing flows migrate when touched; a dedi
 
 ## Amendment — 2026-10-20: opt-in Web Admin flows
 
-Web Admin adopts the same pure-reducer State/Event pattern for Login and Manual Adjustment,
+Web Admin adopts the same pure-reducer State/Event pattern for Login, Manual Adjustment, Points Transfer approvals,
+the Diagnostics Support Bundle, and the Coin Debug Window,
 with machines under `apps/web-admin/src/lib/machines/` and effects in their components.
 Adoption is opt-in per flow, not a blanket Web Admin migration; the Client requirement is unchanged.

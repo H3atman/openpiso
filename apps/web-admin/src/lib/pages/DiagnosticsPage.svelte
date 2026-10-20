@@ -5,6 +5,16 @@
   import SupportBundlePreview from "../components/SupportBundlePreview.svelte";
   import LoadErrorNotice from "../components/LoadErrorNotice.svelte";
   import { reportActionFailure, reportActionSuccess } from "../notifications";
+  import {
+    initialSupportBundleState,
+    reduceSupportBundle,
+    type SupportBundleEvent,
+  } from "../machines/support-bundle";
+  import {
+    initialCoinWindowState,
+    reduceCoinWindow,
+    type CoinWindowEvent,
+  } from "../machines/coin-window";
   import type { HostDiagnostics, PcSettings } from "../types";
 
   // The page is revealed only while Diagnostics Mode (ADR-0081) is on; with
@@ -48,21 +58,18 @@
   let pcsError = $state("");
   let pcId = $state("");
   let windowSeconds = $state(21_600);
-  let bundle = $state<string | null>(null);
-  let bundlePcId = $state("");
-  let bundleBusy = $state(false);
+  // A ready bundle stays under the PC it was collected for (its filename names
+  // that PC), whatever the picker shows now, and survives a later request.
+  let bundleState = $state.raw(initialSupportBundleState);
   let diagnosticsBusy = $state(false);
   let coinBundle = $state<string | null>(null);
   let coinBundleBusy = $state(false);
   let coinCopyBusy = $state(false);
-  let coinWindowSince = $state("");
-  let coinWindowBusy = $state(false);
-  let coinWindowError = $state("");
+  // Reads and resets are keyed so a read already in flight when a reset lands
+  // drops its own answer instead of restoring an error over a known-fresh
+  // start (ADR-0078).
+  let coinWindow = $state.raw(initialCoinWindowState);
   let coinWindowLoaded = false;
-  // Bumped by every Coin Debug Window write and read, so a read that was
-  // already in flight when a reset landed drops its own answer instead of
-  // restoring an error over a known-fresh start (ADR-0078).
-  let coinWindowGeneration = 0;
   let host = $state<HostDiagnostics | null>(null);
   let hostError = $state("");
   let hostLoaded = false;
@@ -100,6 +107,16 @@
     }
   });
 
+  const bundleBusy = $derived(bundleState.phase === "requesting");
+
+  function dispatchBundle(event: SupportBundleEvent) {
+    bundleState = reduceSupportBundle(bundleState, event);
+  }
+
+  function dispatchCoinWindow(event: CoinWindowEvent) {
+    coinWindow = reduceCoinWindow(coinWindow, event);
+  }
+
   async function loadPcs() {
     pcs = null;
     pcsError = "";
@@ -112,20 +129,18 @@
 
   async function requestBundle() {
     if (bundleBusy || !pcId) return;
-    bundleBusy = true;
     const requestedPcId = pcId;
+    dispatchBundle({ type: "requested", pcId: requestedPcId });
     try {
       const markdown = await api.getSupportBundle(requestedPcId, windowSeconds);
       if (!markdown.trim()) {
         throw new Error("the server returned an empty bundle");
       }
-      bundle = markdown;
-      bundlePcId = requestedPcId;
+      dispatchBundle({ type: "succeeded", pcId: requestedPcId, bundle: markdown });
       reportActionSuccess("request", "Support Bundle");
     } catch (caught) {
+      dispatchBundle({ type: "failed", pcId: requestedPcId });
       reportActionFailure("request", "Support Bundle", caught);
-    } finally {
-      bundleBusy = false;
     }
   }
 
@@ -143,17 +158,16 @@
   }
 
   async function loadCoinWindow() {
-    const generation = ++coinWindowGeneration;
+    dispatchCoinWindow({ type: "read-started" });
+    const requestId = coinWindow.requestId;
     try {
       const { since } = await api.getCoinDebugWindow();
-      if (generation !== coinWindowGeneration) return;
-      coinWindowSince = since;
-      coinWindowError = "";
+      dispatchCoinWindow({ type: "read-succeeded", requestId, since });
     } catch (caught) {
-      if (generation !== coinWindowGeneration) return;
       // Name the failure inline: an absent coverage start must not read as an
       // empty window. The reset control still works.
-      coinWindowError = caught instanceof Error ? caught.message : String(caught);
+      const error = caught instanceof Error ? caught.message : String(caught);
+      dispatchCoinWindow({ type: "read-failed", requestId, error });
     }
   }
 
@@ -202,20 +216,15 @@
   }
 
   async function resetCoinWindow() {
-    if (coinWindowBusy) return;
-    coinWindowBusy = true;
+    if (coinWindow.resetting) return;
+    dispatchCoinWindow({ type: "reset-started" });
     try {
       const { since } = await api.resetCoinDebugWindow();
-      // A fresh start supersedes an earlier read failure, and supersedes any
-      // read still in flight.
-      coinWindowGeneration += 1;
-      coinWindowSince = since;
-      coinWindowError = "";
+      dispatchCoinWindow({ type: "reset-succeeded", since });
       reportActionSuccess("reset", "Coin Debug Window");
     } catch (caught) {
+      dispatchCoinWindow({ type: "reset-failed" });
       reportActionFailure("reset", "Coin Debug Window", caught);
-    } finally {
-      coinWindowBusy = false;
     }
   }
 </script>
@@ -345,11 +354,11 @@
               </button>
             </div>
 
-            {#if bundle}
+            {#if bundleState.shown}
               <div class="mt-4">
                 <SupportBundlePreview
-                  {bundle}
-                  filename={`support-bundle-${bundlePcId}.md`}
+                  bundle={bundleState.shown.bundle}
+                  filename={`support-bundle-${bundleState.shown.pcId}.md`}
                   name="Support Bundle"
                 />
               </div>
@@ -413,27 +422,27 @@
             reproducing a coin problem so the next bundle holds a clean
             capture.
           </p>
-          {#if coinWindowError}
+          {#if coinWindow.error}
             <div class="mt-3">
               <LoadErrorNotice
                 message="The Coin Debug Window could not be read"
-                detail={coinWindowError}
-                busy={coinWindowBusy}
+                detail={coinWindow.error}
+                busy={coinWindow.resetting}
                 onRetry={loadCoinWindow}
               />
             </div>
-          {:else if coinWindowSince}
+          {:else if coinWindow.since}
             <p class="mt-3 text-sm">
-              Coin Debug Window start {formatTransactionTime(coinWindowSince)}
+              Coin Debug Window start {formatTransactionTime(coinWindow.since)}
             </p>
           {/if}
           <button
             type="button"
             class="mt-3 rounded-md border bg-card px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-            disabled={coinWindowBusy}
+            disabled={coinWindow.resetting}
             onclick={resetCoinWindow}
           >
-            {coinWindowBusy ? "Resetting…" : "Reset Coin Debug Window"}
+            {coinWindow.resetting ? "Resetting…" : "Reset Coin Debug Window"}
           </button>
         </section>
       </div>

@@ -4,50 +4,51 @@
   import { formatDate, formatDateShort, formatPoints } from "../format";
   import type { PendingPointsTransfer } from "../types";
   import { reportActionFailure, reportActionSuccess } from "../notifications";
+  import {
+    initialTransfersState,
+    reduceTransfers,
+    visibleRequests,
+    type TransferAction,
+    type TransfersEvent,
+    type TransfersState,
+  } from "../machines/transfers";
 
-  let requests = $state<PendingPointsTransfer[]>([]);
-  let error = $state("");
-  let busy = $state(false);
+  let transfers = $state.raw<TransfersState>(initialTransfersState);
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
-  // Per-row busy state prevents duplicate action while a request is in flight.
-  let rowBusy = $state<Record<string, boolean>>({});
+  const visible = $derived(visibleRequests(transfers));
 
+  function dispatch(event: TransfersEvent) {
+    transfers = reduceTransfers(transfers, event);
+  }
+
+  // Each load carries the id the reducer assigned, so an answer older than one
+  // already applied is dropped instead of overwriting newer state.
   async function load() {
-    busy = true;
-    error = "";
+    dispatch({ type: "load-started" });
+    const loadId = transfers.loadId;
     try {
-      requests = await api.listTransferRequests();
+      const requests = await api.listTransferRequests();
+      dispatch({ type: "load-succeeded", loadId, requests });
     } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
-    } finally {
-      busy = false;
+      const error = caught instanceof Error ? caught.message : String(caught);
+      dispatch({ type: "load-failed", loadId, error });
     }
   }
 
-  async function approve(request: PendingPointsTransfer) {
-    rowBusy[request.id] = true;
+  // Rows act concurrently; success hides the row and reloads the list.
+  async function act(request: PendingPointsTransfer, action: TransferAction) {
+    dispatch({ type: "act-started", id: request.id, action });
     try {
-      await api.confirmTransferRequest({ code: request.code });
+      const resolve =
+        action === "approve" ? api.confirmTransferRequest : api.rejectTransferRequest;
+      await resolve({ code: request.code });
+      dispatch({ type: "act-succeeded", id: request.id });
       await load();
-      reportActionSuccess("approve", "Points Transfer Request");
+      reportActionSuccess(action, "Points Transfer Request");
     } catch (caught) {
-      reportActionFailure("approve", "Points Transfer Request", caught);
-    } finally {
-      rowBusy[request.id] = false;
-    }
-  }
-
-  async function reject(request: PendingPointsTransfer) {
-    rowBusy[request.id] = true;
-    try {
-      await api.rejectTransferRequest({ code: request.code });
-      await load();
-      reportActionSuccess("reject", "Points Transfer Request");
-    } catch (caught) {
-      reportActionFailure("reject", "Points Transfer Request", caught);
-    } finally {
-      rowBusy[request.id] = false;
+      dispatch({ type: "act-failed", id: request.id });
+      reportActionFailure(action, "Points Transfer Request", caught);
     }
   }
 
@@ -96,20 +97,21 @@
     </button>
   </div>
 
-  {#if error}
-    <div class="rounded-md bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+  {#if transfers.phase === "failed"}
+    <div class="rounded-md bg-destructive/10 p-4 text-sm text-destructive">{transfers.error}</div>
   {:else}
   <div class="rounded-lg border bg-card">
     <div class="border-b px-4 py-3">
       <h3 class="font-semibold">Pending requests</h3>
     </div>
-    {#if busy && requests.length === 0}
+    {#if transfers.phase === "loading" && visible.length === 0}
       <p class="p-4 text-sm text-muted-foreground">Loading…</p>
-    {:else if requests.length === 0}
+    {:else if visible.length === 0}
       <p class="p-4 text-sm text-muted-foreground">No pending requests.</p>
     {:else}
       <div class="divide-y">
-        {#each requests as request (request.id)}
+        {#each visible as request (request.id)}
+          {@const row = transfers.rows[request.id]}
           <div class="space-y-2 p-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-sm">
@@ -133,16 +135,16 @@
                 <button
                   class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                   type="button"
-                  disabled={rowBusy[request.id]}
-                  onclick={() => approve(request)}
+                  disabled={row?.phase === "acting"}
+                  onclick={() => act(request, "approve")}
                 >
-                  {rowBusy[request.id] ? "…" : "Approve"}
+                  {row?.phase === "acting" && row.action === "approve" ? "…" : "Approve"}
                 </button>
                 <button
                   class="rounded-md border bg-card px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50"
                   type="button"
-                  disabled={rowBusy[request.id]}
-                  onclick={() => reject(request)}
+                  disabled={row?.phase === "acting"}
+                  onclick={() => act(request, "reject")}
                 >
                   Reject
                 </button>
