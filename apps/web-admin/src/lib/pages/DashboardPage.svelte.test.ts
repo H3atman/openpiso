@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api", () => ({
   getDashboard: vi.fn(),
@@ -18,12 +18,16 @@ vi.mock("svelte-sonner", () => ({
   },
 }));
 
-import { fireEvent, render, waitFor, within } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { toast } from "svelte-sonner";
 import * as api from "../api";
 import DashboardPage from "./DashboardPage.svelte";
 import type { DashboardSnapshot, PcMonitoringCheck } from "../types";
+
+// No Vitest globals, so Testing Library does not auto-unmount. Unmount each
+// page so its 5 s dashboard poll cannot add calls to a later test's spy.
+afterEach(() => cleanup());
 
 const dashboard: DashboardSnapshot = {
   shop_name: "Test Shop",
@@ -128,10 +132,10 @@ describe("Owner Sign-Out", () => {
     const row = (pcId: string) =>
       view.container.querySelector(`[data-pc-id="${pcId}"]`) as HTMLElement;
     expect(
-      within(row("pc-01")).queryByRole("button", { name: "Sign Out" }),
+      within(row("pc-01")).queryByRole("button", { name: /^Sign Out/ }),
     ).toBeNull();
     expect(
-      within(row("pc-02")).getByRole("button", { name: "Sign Out" }),
+      within(row("pc-02")).getByRole("button", { name: "Sign Out PC 02" }),
     ).toBeTruthy();
   });
 
@@ -139,7 +143,7 @@ describe("Owner Sign-Out", () => {
     const view = render(DashboardPage);
 
     await waitFor(() => expect(view.getByText("PC 02")).toBeTruthy());
-    await fireEvent.click(view.getByRole("button", { name: "Sign Out" }));
+    await fireEvent.click(view.getByRole("button", { name: "Sign Out PC 02" }));
 
     expect(view.getByText("Sign out juan from PC 02?")).toBeTruthy();
   });
@@ -152,7 +156,7 @@ describe("Owner Sign-Out", () => {
     const view = render(DashboardPage);
 
     await waitFor(() => expect(view.getByText("PC 02")).toBeTruthy());
-    await fireEvent.click(view.getByRole("button", { name: "Sign Out" }));
+    await fireEvent.click(view.getByRole("button", { name: "Sign Out PC 02" }));
     const confirm = view
       .getAllByRole("button", { name: "Sign Out" })
       .at(-1) as HTMLElement;
@@ -188,7 +192,7 @@ describe("PC Monitoring Check now", () => {
     await waitFor(() => expect(view.getByText("PC 01")).toBeTruthy());
     const row = () =>
       view.container.querySelector('[data-pc-id="pc-01"]') as HTMLElement;
-    await fireEvent.click(within(row()).getByRole("button", { name: "Check" }));
+    await fireEvent.click(within(row()).getByRole("button", { name: "Check PC 01" }));
 
     await waitFor(() =>
       expect(api.checkPcMonitoring).toHaveBeenCalledWith("pc-01"),
@@ -216,7 +220,7 @@ describe("PC Monitoring Check now", () => {
     await fireEvent.click(
       within(
         view.container.querySelector('[data-pc-id="pc-01"]') as HTMLElement,
-      ).getByRole("button", { name: "Check" }),
+      ).getByRole("button", { name: "Check PC 01" }),
     );
 
     await waitFor(() =>
@@ -254,7 +258,7 @@ describe("PC Monitoring Check now", () => {
     await fireEvent.click(
       within(
         view.container.querySelector('[data-pc-id="pc-01"]') as HTMLElement,
-      ).getByRole("button", { name: "Check" }),
+      ).getByRole("button", { name: "Check PC 01" }),
     );
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
@@ -380,15 +384,15 @@ describe("Monitoring Suppression", () => {
       suppressedRow.getByTestId("suppression-badge-pc-01").textContent,
     ).toContain("Suppressed until");
     expect(
-      suppressedRow.getByRole("button", { name: "Cancel Suppression" }),
+      suppressedRow.getByRole("button", { name: "Cancel Suppression PC 01" }),
     ).toBeTruthy();
 
     // The unsuppressed PC offers suppression instead.
     const cleanRow = within(row("pc-02"));
     expect(cleanRow.queryByTestId("suppression-badge-pc-02")).toBeNull();
-    expect(cleanRow.getByRole("button", { name: "Suppress" })).toBeTruthy();
+    expect(cleanRow.getByRole("button", { name: "Suppress PC 02" })).toBeTruthy();
     expect(
-      cleanRow.queryByRole("button", { name: "Cancel Suppression" }),
+      cleanRow.queryByRole("button", { name: /^Cancel Suppression/ }),
     ).toBeNull();
   });
 
@@ -405,14 +409,14 @@ describe("Monitoring Suppression", () => {
     await user.click(
       within(
         view.container.querySelector('[data-pc-id="pc-01"]') as HTMLElement,
-      ).getByRole("button", { name: "Suppress" }),
+      ).getByRole("button", { name: "Suppress PC 01" }),
     );
     expect(view.getByText("Suppress monitoring for PC 01?")).toBeTruthy();
 
     await user.selectOptions(view.getByLabelText("Duration"), "60");
     await user.type(view.getByLabelText("Current Web Admin PIN"), "owner-pin");
-    // The dialog's confirm shares its label with the row button; take the
-    // last match, which is always the dialog's.
+    // Row buttons are named "Suppress <PC>", so an exact "Suppress" is the
+    // dialog's confirm; the last match keeps that explicit.
     await user.click(
       view.getAllByRole("button", { name: "Suppress" }).at(-1) as HTMLElement,
     );
@@ -440,7 +444,7 @@ describe("Monitoring Suppression", () => {
     await user.click(
       within(
         view.container.querySelector('[data-pc-id="pc-01"]') as HTMLElement,
-      ).getByRole("button", { name: "Suppress" }),
+      ).getByRole("button", { name: "Suppress PC 01" }),
     );
     await user.type(view.getByLabelText("Current Web Admin PIN"), "wrong");
     await user.click(
@@ -461,7 +465,7 @@ describe("Monitoring Suppression", () => {
     const view = render(DashboardPage);
     await waitFor(() => expect(view.getByText("PC 02")).toBeTruthy());
 
-    await user.click(view.getByRole("button", { name: "Cancel Suppression" }));
+    await user.click(view.getByRole("button", { name: "Cancel Suppression PC 02" }));
     expect(
       view.getByText("Cancel monitoring suppression for PC 02?"),
     ).toBeTruthy();
