@@ -62,9 +62,28 @@
   const sectionLabel = $derived(
     settingsSections.find((entry) => entry.id === tab)?.label ?? "Settings",
   );
+
+  /** One line under the section heading saying what the section governs, so
+   *  the cards below can be titled by what they hold instead of repeating it. */
+  const sectionDescriptions: Record<SettingsSection, string> = {
+    points: "How customers earn Points and what they can redeem them for.",
+    "coin-promo": "Bonus time for logged-in accounts, based on the coins they insert.",
+    attendance: "Free time for accounts that reach a daily spending threshold.",
+    wheel: "Prizes, odds, and spin rules for Spin the Wheel.",
+    "coin-device": "Serial connection, calibration, and health of the coin acceptor.",
+    shop: "Shop identity, the Shop Rate, and opening hours.",
+    pcs: "The PCs in this shop and how the Client recognises each one.",
+    "pc-monitoring": "Detect PCs whose Client stops reporting, and decide what happens next.",
+    telegram: "Send PC Monitoring alerts to a private Telegram chat.",
+    autostart: "Start the Central Terminal automatically on the Admin PC.",
+    security: "Diagnostics visibility and the PINs that protect the Client and this console.",
+    appearance: "The shop accent colour and the light or dark mode of each surface.",
+  };
 </script>
 
-<div class="space-y-6">
+<!-- Settings content stops at 72rem so fields and lists keep a readable
+     width on wide screens instead of stretching edge to edge. -->
+<div class="max-w-6xl space-y-6">
   {#if showIndex}
     <h2 class="text-2xl font-bold tracking-tight">Settings</h2>
 
@@ -81,7 +100,10 @@
       {/each}
     </nav>
   {:else}
-    <h2 class="text-2xl font-bold tracking-tight">{sectionLabel}</h2>
+    <div>
+      <h2 class="text-2xl font-bold tracking-tight">{sectionLabel}</h2>
+      <p class="mt-1 text-sm text-muted-foreground">{sectionDescriptions[tab]}</p>
+    </div>
 
   <div class="min-w-0">
   {#if tab === "points"}

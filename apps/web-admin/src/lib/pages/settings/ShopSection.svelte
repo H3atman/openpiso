@@ -4,6 +4,14 @@
   import { formatDate, formatFractionalSeconds, formatProseDuration } from "../../format";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import { Switch } from "../../components/ui/switch";
+  import { Button } from "../../components/ui/button";
+  import { Input } from "../../components/ui/input";
+  import NativeSelect from "../../components/settings/NativeSelect.svelte";
+  import Notice from "../../components/settings/Notice.svelte";
+  import SettingsCard from "../../components/settings/SettingsCard.svelte";
+  import SettingsField from "../../components/settings/SettingsField.svelte";
+  import ToggleRow from "../../components/settings/ToggleRow.svelte";
+  import CopyIcon from "@lucide/svelte/icons/copy";
   import type {
     ShopHoursDayMode,
     ShopHoursSettingsInput,
@@ -299,6 +307,11 @@
     }
   }
 
+  let shopRateValid = $derived(
+    Number.isInteger(shopRateAmountPesos) && shopRateAmountPesos >= 1 && shopRateAmountPesos <= 1000 &&
+      Number.isInteger(shopRateSeconds) && shopRateSeconds >= 1 && shopRateSeconds <= 86400,
+  );
+
   onMount(() => {
     void loadShop();
     void loadShopRate();
@@ -306,301 +319,302 @@
   });
 </script>
 
-<div class="rounded-lg border bg-card p-6">
-  <h3 class="mb-4 text-lg font-semibold">Shop</h3>
-  <p class="mb-4 text-sm text-muted-foreground">
-    The shop name is shown on the owner dashboard and on every Client's
-    Fullscreen Lock screen. Shutdown Grace controls the blocking countdown
-    after time expires; Offline Grace controls the countdown after a Client
-    loses the admin server.
-  </p>
+<div class="space-y-6">
+  {#if shopLoadError}
+    <Notice tone="danger">{shopLoadError}</Notice>
+  {/if}
 
-  <div class="space-y-4">
-    <div>
-      <label class="block text-sm font-medium" for="shop-name">Shop name</label>
-      <input
+  <SettingsCard
+    title="Shop Details"
+    description="The shop's name, and how long a Client counts down before it powers off."
+  >
+    <div class="grid gap-6 md:grid-cols-2">
+      <SettingsField
         id="shop-name"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-        placeholder="OpenPiso Shop"
-        bind:value={shopName}
-        maxlength="80"
-      />
-      <p class="mt-1 text-xs text-muted-foreground">
-        Non-empty, ≤ 80 characters. Persisted with a <code>shop_name_updated</code> audit event.
-      </p>
-    </div>
-    <div>
-      <label class="block text-sm font-medium" for="shutdown-grace-seconds">Shutdown grace seconds</label>
-      <input
+        label="Shop name"
+        hint="Shown on the owner dashboard and on every Client's Fullscreen Lock screen. Required, up to 80 characters."
+        class="md:col-span-2 md:max-w-md"
+      >
+        <Input
+          id="shop-name"
+          placeholder="OpenPiso Shop"
+          maxlength={80}
+          aria-describedby="shop-name-hint"
+          aria-invalid={!shopName.trim() || undefined}
+          bind:value={shopName}
+        />
+      </SettingsField>
+      <SettingsField
         id="shutdown-grace-seconds"
-        type="number"
-        min="5"
-        max="300"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-        bind:value={shutdownGraceSeconds}
-      />
-      <p class="mt-1 text-xs text-muted-foreground">
-        Blocking countdown before the Client powers off after expiry. Default: 300 seconds. Valid range: 5-300 seconds.
-      </p>
-    </div>
-    <div>
-      <label class="block text-sm font-medium" for="offline-grace-seconds">Offline Grace seconds</label>
-      <input
+        label="Shutdown grace seconds"
+        hint="Blocking countdown before the Client powers off after its time expires. 5–300 seconds. Default: 300."
+      >
+        <Input
+          id="shutdown-grace-seconds"
+          type="number"
+          min="5"
+          max="300"
+          class="tabular-nums"
+          aria-describedby="shutdown-grace-seconds-hint"
+          aria-invalid={shutdownGraceSeconds < 5 || shutdownGraceSeconds > 300 || undefined}
+          bind:value={shutdownGraceSeconds}
+        />
+      </SettingsField>
+      <SettingsField
         id="offline-grace-seconds"
-        type="number"
-        min="1"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-        bind:value={offlineGraceSeconds}
-      />
-      <p class="mt-1 text-xs text-muted-foreground">
-        How long a Client waits before powering off when the admin server is unreachable. Default: 600 seconds. Positive integer seconds; distinct from Shutdown Grace.
-      </p>
+        label="Offline Grace seconds"
+        hint="How long a Client waits before powering off when it can't reach the admin server. Whole seconds, at least 1. Default: 600."
+      >
+        <Input
+          id="offline-grace-seconds"
+          type="number"
+          min="1"
+          class="tabular-nums"
+          aria-describedby="offline-grace-seconds-hint"
+          aria-invalid={offlineGraceSeconds < 1 || undefined}
+          bind:value={offlineGraceSeconds}
+        />
+      </SettingsField>
     </div>
-  </div>
 
-  <button
-    class="mt-6 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-    type="button"
-    disabled={shopBusy || !shopName.trim() || shutdownGraceSeconds < 5 || shutdownGraceSeconds > 300 || offlineGraceSeconds < 1}
-    onclick={saveShop}
+    {#snippet footer()}
+      <Button
+        disabled={shopBusy || !shopName.trim() || shutdownGraceSeconds < 5 || shutdownGraceSeconds > 300 || offlineGraceSeconds < 1}
+        onclick={saveShop}
+      >
+        {shopBusy ? "Saving…" : "Save Shop Details"}
+      </Button>
+    {/snippet}
+  </SettingsCard>
+
+  <SettingsCard
+    title="Shop Rate"
+    description="The paid time a coin buys. Changes apply to new Coin Events; the previous Shop Rate is kept for history."
   >
-    {shopBusy ? "Saving…" : "Save"}
-  </button>
-</div>
+    {#if shopRateLoadError}
+      <Notice tone="danger" class="mb-6">{shopRateLoadError}</Notice>
+    {/if}
 
-{#if shopLoadError}
-  <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{shopLoadError}</div>
-{/if}
-
-<div class="rounded-lg border bg-card p-6">
-  <h3 class="mb-4 text-lg font-semibold">Shop Rate</h3>
-  <p class="mb-4 text-sm text-muted-foreground">
-    The amount of paid time a coin buys. Changes apply to new Coin Events and preserve the previous Shop Rate for history.
-  </p>
-
-  <div class="grid gap-4 sm:grid-cols-2">
-    <div>
-      <label class="block text-sm font-medium" for="shop-rate-amount">Amount (whole pesos)</label>
-      <input
-        id="shop-rate-amount"
-        type="number"
-        min="1"
-        max="1000"
-        step="1"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-        bind:value={shopRateAmountPesos}
-      />
-      <p class="mt-1 text-xs text-muted-foreground">Valid range: ₱1-₱1,000.</p>
-    </div>
-    <div>
-      <label class="block text-sm font-medium" for="shop-rate-seconds">Seconds</label>
-      <input
+    <div class="grid max-w-xl gap-6 sm:grid-cols-2">
+      <SettingsField id="shop-rate-amount" label="Amount (whole pesos)" hint="₱1–₱1,000.">
+        <div class="relative">
+          <span class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm text-muted-foreground" aria-hidden="true">₱</span>
+          <Input
+            id="shop-rate-amount"
+            type="number"
+            min="1"
+            max="1000"
+            step="1"
+            class="pl-6 tabular-nums"
+            aria-describedby="shop-rate-amount-hint"
+            bind:value={shopRateAmountPesos}
+          />
+        </div>
+      </SettingsField>
+      <SettingsField
         id="shop-rate-seconds"
-        type="number"
-        min="1"
-        max="86400"
-        step="1"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-        bind:value={shopRateSeconds}
-      />
-      <p class="mt-1 text-xs text-muted-foreground">Valid range: 1-86,400 seconds. = {formatProseDuration(shopRateSeconds)}</p>
+        label="Seconds"
+        hint="1–86,400 seconds (= {formatProseDuration(shopRateSeconds)})."
+      >
+        <Input
+          id="shop-rate-seconds"
+          type="number"
+          min="1"
+          max="86400"
+          step="1"
+          class="tabular-nums"
+          aria-describedby="shop-rate-seconds-hint"
+          bind:value={shopRateSeconds}
+        />
+      </SettingsField>
     </div>
-  </div>
 
-  {#if coinPulseMapLoadError}
-    <div class="mt-4 rounded-md bg-muted p-3 text-sm text-muted-foreground" role="status">
-      Coin denomination purchase previews unavailable: {coinPulseMapLoadError}
-    </div>
-  {:else if coinDenominationPreviews.length > 0}
-    <div class="mt-4 rounded-md border p-4 text-sm" role="status">
-      <p class="font-medium">Configured coin purchase preview:</p>
-      <ul class="mt-2 list-inside list-disc space-y-1">
-        {#each coinDenominationPreviews as denomination (denomination.amount_cents)}
-          <li>
-            {formatCoinDenomination(denomination.amount_cents)} buys
-            {formatProseDuration(denomination.seconds)}.
-            {#if denomination.remainder > 0}
-              <span class="text-amber-700 dark:text-amber-300">
-                Loses {formatFractionalSeconds(denomination.remainder, denomination.denominator)}
-                to integer division.
-              </span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-      {#if coinDenominationPreviews.some((denomination) => denomination.remainder > 0)}
-        <p class="mt-2 text-muted-foreground">Truncation is advisory only; saving remains available.</p>
-      {/if}
-    </div>
-  {/if}
+    {#if coinPulseMapLoadError}
+      <Notice class="mt-6" role="status">
+        <p>Coin denomination purchase previews unavailable: {coinPulseMapLoadError}</p>
+      </Notice>
+    {:else if coinDenominationPreviews.length > 0}
+      <div class="mt-6 border-t pt-6" role="status">
+        <p class="text-sm font-medium">Configured coin purchase preview</p>
+        <ul class="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          {#each coinDenominationPreviews as denomination (denomination.amount_cents)}
+            <li class="rounded-lg border bg-muted/40 px-3 py-2">
+              <span class="font-semibold tabular-nums">{formatCoinDenomination(denomination.amount_cents)}</span>
+              buys
+              <span class="font-semibold">{formatProseDuration(denomination.seconds)}</span>.
+              {#if denomination.remainder > 0}
+                <span class="block text-xs text-amber-700 dark:text-amber-300">
+                  Loses {formatFractionalSeconds(denomination.remainder, denomination.denominator)}
+                  to integer division.
+                </span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        {#if coinDenominationPreviews.some((denomination) => denomination.remainder > 0)}
+          <p class="mt-3 text-xs text-muted-foreground">Truncation is advisory only; saving remains available.</p>
+        {/if}
+      </div>
+    {/if}
 
-  {#if shopRateLoadError}
-    <div class="mt-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{shopRateLoadError}</div>
-  {/if}
+    {#snippet footer()}
+      <Button disabled={!shopRateLoaded || shopRateBusy || !shopRateValid} onclick={saveShopRate}>
+        {shopRateBusy ? "Saving…" : "Save Shop Rate"}
+      </Button>
+    {/snippet}
+  </SettingsCard>
 
-  <button
-    class="mt-6 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-    type="button"
-    disabled={!shopRateLoaded || shopRateBusy || !Number.isInteger(shopRateAmountPesos) || shopRateAmountPesos < 1 || shopRateAmountPesos > 1000 || !Number.isInteger(shopRateSeconds) || shopRateSeconds < 1 || shopRateSeconds > 86400}
-    onclick={saveShopRate}
-  >
-    {shopRateBusy ? "Saving…" : "Save Shop Rate"}
-  </button>
-</div>
+  <SettingsCard title="Shop Hours" description="The weekly Open Periods, and the Last Call warning before a scheduled close.">
+    <div class="space-y-6">
+      <ToggleRow
+        id="shop-hours-enabled"
+        label="Enable Shop Hours"
+        description="Off by default. Saved hours don't affect the shop until this is on."
+        status={shopHoursEnabled ? "On" : "Off"}
+      >
+        <Switch id="shop-hours-enabled" aria-describedby="shop-hours-enabled-description" bind:checked={shopHoursEnabled} />
+      </ToggleRow>
 
-<div class="rounded-lg border bg-card p-6">
-  <div class="mb-4 flex flex-wrap items-start justify-between gap-4">
-    <div>
-      <h3 class="mb-2 text-lg font-semibold">Shop Hours</h3>
-      <p class="text-sm text-muted-foreground">
-        Configure the weekly Open Periods. The feature ships disabled, so
-        these saved hours do not affect the shop until enabled.
-      </p>
-    </div>
-    <label class="flex shrink-0 items-center gap-3 text-sm font-medium" for="shop-hours-enabled">
-      Enable Shop Hours
-      <Switch id="shop-hours-enabled" size="sm" bind:checked={shopHoursEnabled} />
-    </label>
-  </div>
+      <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-lg border bg-muted/40 px-4 py-3">
+        <div class="flex items-center gap-3">
+          <span
+            class="size-2.5 shrink-0 rounded-full {shopHoursStatus.open ? 'bg-emerald-500' : 'bg-destructive'}"
+            aria-hidden="true"
+          ></span>
+          <div>
+            <p class="text-xs text-muted-foreground">Shop Status</p>
+            <strong class="font-semibold">{shopHoursStatus.open ? "Shop Open" : "Shop Closed"}</strong>
+          </div>
+        </div>
+        <p class="text-sm text-muted-foreground">
+          {#if shopHoursStatus.next_change_at}
+            Next change: {formatDate(shopHoursStatus.next_change_at)}
+          {:else}
+            No scheduled change.
+          {/if}
+          · {shopHoursStatus.reason === "override" ? "Shop Override" : "Schedule"}
+        </p>
+      </div>
 
-  <div class="mb-5 rounded-md bg-muted p-4">
-    <div class="flex flex-wrap items-baseline justify-between gap-2">
-      <h4 class="font-semibold">Shop Status</h4>
-      <strong class:text-primary={shopHoursStatus.open} class:text-destructive={!shopHoursStatus.open}>
-        {shopHoursStatus.open ? "Shop Open" : "Shop Closed"}
-      </strong>
-    </div>
-    <p class="mt-1 text-sm text-muted-foreground">
-      {#if shopHoursStatus.next_change_at}
-        Next change: {formatDate(shopHoursStatus.next_change_at)}
-      {:else}
-        No scheduled change.
-      {/if}
-      · {shopHoursStatus.reason === "override" ? "Shop Override" : "Schedule"}
-    </p>
-  </div>
+      <SettingsField
+        id="last-call-lead"
+        label="Last Call lead minutes"
+        hint="How long before a scheduled close the Last Call warning starts. Zero disables it."
+        class="max-w-xs"
+      >
+        <Input
+          id="last-call-lead"
+          type="number"
+          min="0"
+          max="65535"
+          class="tabular-nums"
+          aria-describedby="last-call-lead-hint"
+          aria-invalid={lastCallLeadMinutes < 0 || lastCallLeadMinutes > 65535 || undefined}
+          bind:value={lastCallLeadMinutes}
+        />
+      </SettingsField>
 
-  <div>
-    <label class="block text-sm font-medium" for="last-call-lead">Last Call lead minutes</label>
-    <input
-      id="last-call-lead"
-      type="number"
-      min="0"
-      max="65535"
-      class="mt-1 block w-40 rounded-md border bg-background px-3 py-2 text-sm"
-      bind:value={lastCallLeadMinutes}
-    />
-    <p class="mt-1 text-xs text-muted-foreground">Zero disables the scheduled-close warning.</p>
-  </div>
-
-  <div class="mt-6 overflow-x-auto">
-    <table class="w-full text-left text-sm">
-      <thead>
-        <tr class="border-b text-muted-foreground">
-          <th class="px-2 py-2 font-medium">Day</th>
-          <th class="px-2 py-2 font-medium">Mode</th>
-          <th class="px-2 py-2 font-medium">Open Period start</th>
-          <th class="px-2 py-2 font-medium">Open Period end</th>
-          <th class="px-2 py-2 font-medium"><span class="sr-only">Actions</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each shopDays as day (day.weekday)}
-          <tr class="border-b last:border-0">
-            <th class="whitespace-nowrap px-2 py-3 font-medium">{weekdayLabels[day.weekday]}</th>
-            <td class="px-2 py-3">
-              <select class="rounded-md border bg-background px-2 py-2" bind:value={day.mode} aria-label={`${weekdayLabels[day.weekday]} mode`}>
+      <div class="overflow-hidden rounded-lg border">
+        <div
+          class="hidden grid-cols-[7rem_minmax(0,12rem)_minmax(0,9rem)_minmax(0,9rem)_minmax(0,1fr)] items-center gap-4 border-b bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground md:grid"
+          aria-hidden="true"
+        >
+          <span>Day</span>
+          <span>Mode</span>
+          <span>Open Period start</span>
+          <span>Open Period end</span>
+          <span></span>
+        </div>
+        <ul class="divide-y" aria-label="Weekly Open Periods">
+          {#each shopDays as day (day.weekday)}
+            {@const dayLabel = weekdayLabels[day.weekday]}
+            <li
+              class="grid grid-cols-2 gap-x-3 gap-y-2 px-4 py-3 md:grid-cols-[7rem_minmax(0,12rem)_minmax(0,9rem)_minmax(0,9rem)_minmax(0,1fr)] md:items-center md:gap-4"
+            >
+              <p class="self-center font-medium">{dayLabel}</p>
+              <div class="justify-self-end md:col-start-5 md:row-start-1">
+                <Button variant="ghost" size="sm" disabled={shopHoursBusy} onclick={() => copyShopDayToAll(day.weekday)}>
+                  <CopyIcon aria-hidden="true" />
+                  Copy to all days
+                </Button>
+              </div>
+              <NativeSelect
+                class="col-span-2 md:col-span-1 md:col-start-2 md:row-start-1"
+                bind:value={day.mode}
+                aria-label={`${dayLabel} mode`}
+              >
                 <option value="open_period">Open Period</option>
                 <option value="closed_all_day">Closed all day</option>
                 <option value="open_24_hours">Open 24 hours</option>
-              </select>
-            </td>
-            <td class="px-2 py-3">
+              </NativeSelect>
               {#if day.mode === "open_period"}
-                <input class="rounded-md border bg-background px-2 py-2" type="time" bind:value={day.openTime} aria-label={`${weekdayLabels[day.weekday]} Open Period start time`} />
+                <label class="grid gap-1 md:col-start-3 md:row-start-1">
+                  <span class="text-xs text-muted-foreground md:hidden">Start</span>
+                  <Input type="time" class="tabular-nums" bind:value={day.openTime} aria-label={`${dayLabel} Open Period start time`} />
+                </label>
+                <label class="grid gap-1 md:col-start-4 md:row-start-1">
+                  <span class="text-xs text-muted-foreground md:hidden">End</span>
+                  <Input type="time" class="tabular-nums" bind:value={day.closeTime} aria-label={`${dayLabel} Open Period end time`} />
+                </label>
               {:else}
-                <span class="text-muted-foreground">—</span>
+                <p class="col-span-2 text-sm text-muted-foreground md:col-span-2 md:col-start-3 md:row-start-1">
+                  No Open Period times to set.
+                </p>
               {/if}
-            </td>
-            <td class="px-2 py-3">
-              {#if day.mode === "open_period"}
-                <input class="rounded-md border bg-background px-2 py-2" type="time" bind:value={day.closeTime} aria-label={`${weekdayLabels[day.weekday]} Open Period end time`} />
-              {:else}
-                <span class="text-muted-foreground">—</span>
-              {/if}
-            </td>
-            <td class="px-2 py-3 text-right">
-              <button
-                class="whitespace-nowrap rounded-md border px-2 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50"
-                type="button"
-                disabled={shopHoursBusy}
-                onclick={() => copyShopDayToAll(day.weekday)}
-              >
-                Copy to all days
-              </button>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  </div>
-
-  {#if shopHoursStatus.reason === "override" && shopHoursOverride}
-    <p class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md bg-muted p-3 text-sm">
-      <span>
-        {shopHoursOverride.mode === "force_open" ? "Force-open" : "Force-closed"}
-        until {formatDate(shopHoursOverride.expires_at)}.
-      </span>
-      <button
-        class="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
-        type="button"
-        disabled={shopOverrideBusy}
-        onclick={clearShopOverride}
-      >
-        {shopOverrideBusy ? "Clearing…" : "Clear Shop Override"}
-      </button>
-    </p>
-  {:else}
-    <p class="mt-4 text-sm text-muted-foreground">No active Shop Override.</p>
-  {/if}
-
-  <div class="mt-5 space-y-4 rounded-md border p-4">
-    <h4 class="font-semibold">Shop Override</h4>
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div>
-        <label class="block text-sm font-medium" for="shop-override-mode">Mode</label>
-        <select id="shop-override-mode" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={shopOverrideMode}>
-          <option value="force_closed">Force-closed</option>
-          <option value="force_open">Force-open</option>
-        </select>
-      </div>
-      <div>
-        <label class="block text-sm font-medium" for="shop-override-expires-at">Expires at</label>
-        <input
-          id="shop-override-expires-at"
-          class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-          type="datetime-local"
-          bind:value={shopOverrideExpiresAt}
-        />
-        <p class="mt-1 text-xs text-muted-foreground">Pre-filled with the next scheduled boundary.</p>
+            </li>
+          {/each}
+        </ul>
       </div>
     </div>
-    <button
-      class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-      type="button"
-      disabled={!shopHoursLoaded || shopOverrideBusy || !shopOverrideExpiresAt}
-      onclick={saveShopOverride}
-    >
-      {shopOverrideBusy ? "Saving…" : "Set Shop Override"}
-    </button>
-  </div>
 
-  <button
-    class="mt-6 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-    type="button"
-    disabled={!shopHoursLoaded || shopHoursBusy || lastCallLeadMinutes < 0 || lastCallLeadMinutes > 65535}
-    onclick={saveShopHours}
-  >
-    {shopHoursBusy ? "Saving…" : "Save Shop Hours"}
-  </button>
+    {#snippet footer()}
+      <p class="mr-auto text-xs text-muted-foreground max-md:basis-full">Saves the switch, Last Call, and weekly hours.</p>
+      <Button
+        disabled={!shopHoursLoaded || shopHoursBusy || lastCallLeadMinutes < 0 || lastCallLeadMinutes > 65535}
+        onclick={saveShopHours}
+      >
+        {shopHoursBusy ? "Saving…" : "Save Shop Hours"}
+      </Button>
+    {/snippet}
+  </SettingsCard>
+
+  <SettingsCard title="Shop Override" description="Force the shop open or closed until a set time, instead of following Shop Hours.">
+    {#if shopHoursStatus.reason === "override" && shopHoursOverride}
+      <div class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
+        <p>
+          <span class="font-semibold">{shopHoursOverride.mode === "force_open" ? "Force-open" : "Force-closed"}</span>
+          until {formatDate(shopHoursOverride.expires_at)}.
+        </p>
+        <Button variant="outline" size="sm" disabled={shopOverrideBusy} onclick={clearShopOverride}>
+          {shopOverrideBusy ? "Clearing…" : "Clear Shop Override"}
+        </Button>
+      </div>
+    {:else}
+      <p class="mb-6 text-sm text-muted-foreground">No active Shop Override.</p>
+    {/if}
+
+    <div class="grid max-w-xl gap-6 sm:grid-cols-2">
+      <SettingsField id="shop-override-mode" label="Mode">
+        <NativeSelect id="shop-override-mode" bind:value={shopOverrideMode}>
+          <option value="force_closed">Force-closed</option>
+          <option value="force_open">Force-open</option>
+        </NativeSelect>
+      </SettingsField>
+      <SettingsField id="shop-override-expires-at" label="Expires at" hint="Pre-filled with the next scheduled boundary.">
+        <Input
+          id="shop-override-expires-at"
+          type="datetime-local"
+          class="tabular-nums"
+          aria-describedby="shop-override-expires-at-hint"
+          bind:value={shopOverrideExpiresAt}
+        />
+      </SettingsField>
+    </div>
+
+    {#snippet footer()}
+      <Button disabled={!shopHoursLoaded || shopOverrideBusy || !shopOverrideExpiresAt} onclick={saveShopOverride}>
+        {shopOverrideBusy ? "Saving…" : "Set Shop Override"}
+      </Button>
+    {/snippet}
+  </SettingsCard>
 </div>

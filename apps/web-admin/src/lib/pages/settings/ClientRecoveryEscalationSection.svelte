@@ -2,7 +2,11 @@
   import { onMount } from "svelte";
   import * as api from "../../api";
   import ConfirmDialog from "../../components/ConfirmDialog.svelte";
-  import { Badge } from "$lib/components/ui/badge";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import Notice from "$lib/components/settings/Notice.svelte";
+  import SettingsCard from "$lib/components/settings/SettingsCard.svelte";
+  import ToggleRow from "$lib/components/settings/ToggleRow.svelte";
   import { Switch } from "../../components/ui/switch";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import type { ClientRecoveryEscalation, PcMonitoringStatus } from "../../types";
@@ -96,104 +100,101 @@
   );
 </script>
 
-<div class="rounded-lg border bg-card p-6">
-  <h3 class="mb-4 text-lg font-semibold">Client Recovery Escalation</h3>
-
+<SettingsCard
+  title="Client Recovery Escalation"
+  description="What Admin does when a PC's Client stays absent and its Guard cannot bring it back."
+>
   {#if loadError}
-    <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-      {loadError}
-    </div>
+    <Notice tone="danger">{loadError}</Notice>
   {/if}
 
   {#if monitoring && !(monitoring.enabled && monitoring.platform_supported)}
-    <p class="text-sm text-muted-foreground">
-      Available once PC Monitoring is on. Escalation acts on a
-      <strong>Client Reachability Mismatch</strong>, so there is nothing for it
-      to act on until that detection is running.
-    </p>
+    <div class="rounded-lg border border-dashed px-4 py-8 text-center">
+      <p class="text-sm font-medium">Available once PC Monitoring is on</p>
+      <p class="mx-auto mt-1 max-w-prose text-sm text-muted-foreground">
+        Escalation acts on a <strong class="font-medium text-foreground">Client Reachability Mismatch</strong>, so
+        there is nothing for it to act on until that detection is running.
+      </p>
+    </div>
   {:else if settings}
-    <div class="space-y-4">
-      <p class="text-sm text-muted-foreground">
+    <div class="space-y-6">
+      <p class="max-w-prose text-sm text-muted-foreground">
         The Client Guard relaunches an absent Client on its own. When a PC keeps
         answering on the LAN, its Client still does not report, and its Guard
         reports that it has tried and failed to relaunch, Admin
-        <strong>powers that PC off</strong>. The session ends and the customer
+        <strong class="text-foreground">powers that PC off</strong>. The session ends and the customer
         keeps their balance, time, and Points — nothing is confiscated. At most
         one power off per PC per hour, and never while the PC is suppressed or
         the Guard is standing down for owner maintenance.
       </p>
 
-      <div class="flex items-center gap-3">
-        <span class="text-sm font-medium">Escalation:</span>
-        <Badge variant={settings.enabled ? "default" : "secondary"}>
-          {settings.enabled ? "On" : "Off"}
-        </Badge>
-      </div>
-
       <!-- The Switch reflects the saved state; toggling it only opens the
            PIN confirmation. -->
-      <div class="flex items-center gap-3">
+      <ToggleRow
+        id="escalation-enabled"
+        label="Power off PCs that cannot recover"
+        description="Changing this requires your current Web Admin PIN and is audited."
+        status={settings.enabled ? "On" : "Off"}
+        class="border-t pt-6"
+      >
         <Switch
+          id="escalation-enabled"
+          aria-describedby="escalation-enabled-description"
           checked={settings.enabled}
           onCheckedChange={(value) => askToggle(value === true)}
           disabled={busy}
         />
-        <span class="text-xs text-muted-foreground">
-          Changing this requires your current Web Admin PIN and is audited.
-        </span>
-      </div>
+      </ToggleRow>
 
-      <div class="space-y-1">
-        <label class="block text-sm font-medium" for="escalation-delay">
-          Escalation Delay (seconds)
-        </label>
-        <div class="flex items-center gap-2">
-          <input
+      <div class="grid gap-1.5 border-t pt-6">
+        <label class="text-sm font-medium" for="escalation-delay">Escalation Delay (seconds)</label>
+        <div class="flex flex-wrap items-center gap-2">
+          <Input
             id="escalation-delay"
             type="number"
             min={MIN_DELAY_SECS}
             max={MAX_DELAY_SECS}
-            class="w-32 rounded-md border bg-background px-3 py-2 text-sm"
+            class="w-32 tabular-nums"
+            aria-invalid={!delayValid || undefined}
+            aria-describedby="escalation-delay-hint{delayValid ? '' : ' escalation-delay-error'}"
             bind:value={delayInput}
             disabled={busy}
           />
-          <button
-            type="button"
-            class="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
+          <Button
+            variant="outline"
             disabled={busy || !delayValid || delayInput === settings.delay_secs}
             onclick={askDelay}
           >
             Save delay
-          </button>
+          </Button>
         </div>
-        <p class="text-xs text-muted-foreground">
+        {#if !delayValid}
+          <p id="escalation-delay-error" class="text-xs text-destructive">
+            Enter a whole number between {MIN_DELAY_SECS} and {MAX_DELAY_SECS}.
+          </p>
+        {/if}
+        <p id="escalation-delay-hint" class="max-w-prose text-xs text-muted-foreground">
           How long the Guard must be visibly failing to recover the Client
           before the PC is powered off. Minimum {MIN_DELAY_SECS} seconds. This
           is a second clock, separate from the 60-second mismatch grace that
           opens the Alert.
         </p>
-        {#if !delayValid}
-          <p class="text-xs text-destructive">
-            Enter a whole number between {MIN_DELAY_SECS} and {MAX_DELAY_SECS}.
-          </p>
-        {/if}
       </div>
 
       {#if settings.enabled}
-        <div
-          class="rounded-md bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200"
-          role="status"
-        >
-          OpenPiso is authorised to power customer PCs off. A PC whose Guard is
-          not running is never escalated against — that stays a
-          <strong>Client Guard Coverage</strong> Alert for you to act on.
-        </div>
+        <Notice tone="warning" role="status">
+          <p>
+            OpenPiso is authorised to power customer PCs off. A PC whose Guard is
+            not running is never escalated against — that stays a
+            <strong>Client Guard Coverage</strong> Alert for you to act on.
+          </p>
+        </Notice>
       {/if}
     </div>
   {:else if !loadError}
-    <div class="text-sm text-muted-foreground">Loading escalation policy…</div>
+    <p class="text-sm text-muted-foreground">Loading escalation policy…</p>
   {/if}
-</div>
+</SettingsCard>
 
 {#if settings && pending}
   <ConfirmDialog
@@ -220,20 +221,19 @@
       Escalation will wait {pending.delay_secs} seconds of continuous failed
       recovery before powering a PC off.
     {/if}
-    <div class="mt-3">
-      <label class="block text-sm font-medium" for="escalation-pin">
-        Current Web Admin PIN
-      </label>
-      <input
+    <div class="mt-4 grid gap-1.5">
+      <label class="text-sm font-medium text-foreground" for="escalation-pin">Current Web Admin PIN</label>
+      <Input
         id="escalation-pin"
         type="password"
         autocomplete="current-password"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
         placeholder="Enter current PIN"
+        aria-invalid={pinError ? true : undefined}
+        aria-describedby={pinError ? "escalation-pin-error" : undefined}
         bind:value={pin}
       />
       {#if pinError}
-        <p class="mt-1 text-xs text-destructive">{pinError}</p>
+        <p id="escalation-pin-error" class="text-xs text-destructive">{pinError}</p>
       {/if}
     </div>
   </ConfirmDialog>

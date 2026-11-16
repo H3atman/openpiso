@@ -16,6 +16,17 @@
   import type { WheelSettings, WheelSegmentRow } from "../../types";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import { Switch } from "../../components/ui/switch";
+  import { Button } from "../../components/ui/button";
+  import { Input } from "../../components/ui/input";
+  import Notice from "../../components/settings/Notice.svelte";
+  import SettingsCard from "../../components/settings/SettingsCard.svelte";
+  import SettingsField from "../../components/settings/SettingsField.svelte";
+  import ToggleRow from "../../components/settings/ToggleRow.svelte";
+  import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
+  import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
+  import CopyIcon from "@lucide/svelte/icons/copy";
+  import PlusIcon from "@lucide/svelte/icons/plus";
+  import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
   let wheel = $state<WheelSettings | null>(null);
   let wheelEnabled = $state(false);
@@ -148,21 +159,14 @@
   });
 </script>
 
-<div class="rounded-lg border bg-card p-6">
-  <div class="mb-4 flex flex-wrap items-center justify-between gap-4">
-    <h3 class="text-lg font-semibold">Spin the Wheel Settings</h3>
-    <div class="flex flex-wrap items-center gap-4">
-      <label class="flex items-center gap-2 text-sm font-medium">
-        <Switch size="sm" bind:checked={wheelEnabled} />
-        Wheel enabled
-      </label>
-      <label class="flex items-center gap-2 text-sm font-medium">
-        <Switch size="sm" bind:checked={passwordConfirmationRequired} />
-        Require password to spin
-      </label>
-    </div>
+{#snippet figure(label: string, value: string, danger = false)}
+  <div class="min-w-0">
+    <p class="text-xs text-muted-foreground">{label}</p>
+    <p class="mt-0.5 font-mono text-lg font-semibold tabular-nums" class:text-destructive={danger}>{value}</p>
   </div>
+{/snippet}
 
+<div class="space-y-6">
   <!--
     Warn on load, not only on save. An active Shop Rate can lower the paid-time
     value of an earned point enough to make an existing wheel unsafe without
@@ -170,55 +174,35 @@
     separate save/spin refusal; this rate-based warning is advisory only.
   -->
   {#if wheel && liveUnsafeWheel}
-    <div class="mb-4 rounded-md border border-destructive bg-destructive/10 p-3 text-sm text-destructive">
-      {#if liveUnsafeHouseEdge}
-        <p class="font-semibold">This wheel pays out more than a point is worth.</p>
-        <p class="mt-1">
+    {#if liveUnsafeHouseEdge}
+      <Notice tone="danger" title="This wheel pays out more than a point is worth.">
+        <p>
           A spin is expected to return {formatDuration(Math.round(expectations.expectedSecondsPerSpin))},
           but a point redeems for {formatDuration(wheel.point_value_seconds)}. Customers would spin
           instead of redeem, so spins are refused until this is fixed. Lower the prizes, or repeat
           “Try again” across more segments.
         </p>
-      {:else}
-        <p class="font-semibold">This wheel is unsafe under the active Shop Rate.</p>
-        <p class="mt-1">
+      </Notice>
+    {:else}
+      <Notice tone="danger" title="This wheel is unsafe under the active Shop Rate.">
+        <p>
           A spin is expected to return {formatDuration(Math.round(expectations.expectedSecondsPerSpin))},
           but an earned point currently buys only {formatDuration(wheel.shop_rate_point_value_seconds)}.
           Retune the wheel by lowering prizes, or repeat “Try again” across more segments.
         </p>
-      {/if}
-    </div>
+      </Notice>
+    {/if}
   {/if}
 
-  {#if wheel}
-    <div class="mb-4 grid gap-4 sm:grid-cols-4">
-      <div class="rounded-md bg-muted p-3 text-sm">
-        <span class="text-muted-foreground">House Edge:</span>
-        <span class="ml-2 font-mono font-bold" class:text-primary={!liveUnsafeHouseEdge} class:text-destructive={liveUnsafeHouseEdge}>
-          {(liveHouseEdgeBasisPoints / 100).toFixed(2)}%
-        </span>
-      </div>
-      <div class="rounded-md bg-muted p-3 text-sm">
-        <span class="text-muted-foreground">Point Value:</span>
-        <span class="ml-2 font-mono font-bold">{formatDuration(wheel.point_value_seconds)}</span>
-      </div>
-      <div class="rounded-md bg-muted p-3 text-sm">
-        <span class="text-muted-foreground">Exp. Time/spin:</span>
-        <span class="ml-2 font-mono font-bold">{formatDuration(Math.round(expectations.expectedSecondsPerSpin))}</span>
-      </div>
-      <div class="rounded-md bg-muted p-3 text-sm">
-        <span class="text-muted-foreground">Exp. Points/spin:</span>
-        <span class="ml-2 font-mono font-bold">{formatPoints(Math.round(expectations.expectedPointsPerSpin))}</span>
-      </div>
-    </div>
+  {#if loadError}
+    <Notice tone="danger">{loadError}</Notice>
   {/if}
 
-  <!-- wheel preview -->
-  <div class="mb-6 flex flex-col items-center gap-4 sm:flex-row">
-    <div class="shrink-0">
+  <div class="grid items-start gap-6 xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+    <SettingsCard title="Preview" description="Updates as you edit, before you save.">
       <svg
         viewBox="0 0 240 240"
-        class="h-56 w-56"
+        class="mx-auto size-56"
         role="img"
         aria-label="Wheel preview"
       >
@@ -268,105 +252,167 @@
             </text>
           {/each}
 
-          <!-- centre dot -->
-          <circle cx="0" cy="0" r="6" fill="var(--foreground)" />
+          <!-- centre dot; an empty wheel has no hub, only its "No segments" label -->
+          {#if arcs.length > 0}
+            <circle cx="0" cy="0" r="6" fill="var(--foreground)" />
+          {/if}
         </g>
       </svg>
-    </div>
-  </div>
 
-  <div class="space-y-4">
-    <div class="grid gap-4 sm:grid-cols-3">
-      <div>
-        <label class="block text-sm font-medium" for="wheel-free-spin-cap">Free spin cap</label>
-        <input
-          id="wheel-free-spin-cap"
-          type="number"
-          class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-          bind:value={freeSpinCap}
-        />
-      </div>
-      <div>
-        <label class="block text-sm font-medium" for="wheel-bokya-rate">Bokya Rate (%)</label>
-        <input
-          id="wheel-bokya-rate"
-          type="number"
-          min="0"
-          max="100"
-          step="0.01"
-          placeholder="Unset"
-          class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-          value={bokyaRateInput === "" ? "" : Number(bokyaRateInput) / 100}
-          oninput={(event) => {
-            const value = event.currentTarget.value;
-            bokyaRateInput = value === "" ? "" : String(Math.round(Number(value) * 100));
-          }}
-        />
-        <p class="mt-1 text-xs text-muted-foreground">
-          Natural: {(naturalBokyaRate / 100).toFixed(2)}%. Clear to use natural uniform odds.
-        </p>
-      </div>
-      <div>
-        <label class="block text-sm font-medium" for="wheel-spin-duration">Spin duration (seconds)</label>
-        <input
-          id="wheel-spin-duration"
-          type="number"
-          class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-          bind:value={spinDuration}
-        />
-      </div>
-    </div>
-  </div>
-
-  <div class="mt-6">
-    <div class="mb-2 flex items-center justify-between">
-      <h4 class="text-sm font-semibold">Segments</h4>
-      <button class="text-xs text-primary hover:underline" type="button" onclick={addSegment}>+ Add</button>
-    </div>
-
-    <p class="mb-3 text-xs text-muted-foreground">
-      Slices stay equal in size. Percentages below are the true landing odds under the current
-      unsaved Bokya Rate.
-    </p>
-
-    <div class="space-y-2">
-      {#each segments as seg, i}
-        <div class="flex items-center gap-2 rounded-md border bg-muted/50 p-2 max-md:flex-wrap">
-          <span class="w-6 shrink-0 text-center text-xs text-muted-foreground">{i + 1}</span>
-          <input class="w-24 rounded border bg-background px-2 py-1 text-xs" aria-label={`Label for segment ${i + 1}`} placeholder="Label" bind:value={seg.label} />
-          <input type="number" class="w-20 rounded border bg-background px-2 py-1 text-xs" aria-label={`Seconds for ${seg.label || `segment ${i + 1}`}`} placeholder="Seconds" bind:value={seg.seconds} />
-          <input class="w-20 rounded border bg-background px-2 py-1 text-xs" inputmode="decimal" aria-label={`Points for ${seg.label || `segment ${i + 1}`}`} placeholder="Points" bind:value={pointInputs[i]} />
-          <label class="flex items-center gap-1 text-xs">
-            <input type="checkbox" bind:checked={seg.free_spin} class="rounded" />
-            Free
-          </label>
-          <!-- What this slice actually pays, echoed back from the same
-               derivation the customer sees on the wheel. -->
-          <span class="min-w-24 flex-1 truncate text-xs font-medium" title="Prize paid by this slice">
-            {previewSegments[i] ? formatPrizeLine(previewSegments[i]) : ""}
-          </span>
-          <span class="w-16 text-right font-mono text-xs" title="True landing probability">
-            {(expectations.probabilityPercent[i] ?? 0).toFixed(2)}%
-          </span>
-          <button class="text-xs hover:underline disabled:opacity-40" type="button" aria-label={`Move segment ${i + 1} up`} disabled={i === 0} onclick={() => moveSegment(i, -1)}>↑</button>
-          <button class="text-xs hover:underline disabled:opacity-40" type="button" aria-label={`Move segment ${i + 1} down`} disabled={i === segments.length - 1} onclick={() => moveSegment(i, 1)}>↓</button>
-          <button class="text-xs text-primary hover:underline" type="button" onclick={() => duplicateSegment(i)}>Copy</button>
-          <button class="text-xs text-destructive hover:underline" type="button" onclick={() => removeSegment(i)}>Remove</button>
+      {#if wheel}
+        <div class="mt-6 grid grid-cols-2 gap-4 border-t pt-4">
+          {@render figure("House Edge", `${(liveHouseEdgeBasisPoints / 100).toFixed(2)}%`, liveUnsafeHouseEdge)}
+          {@render figure("Point Value", formatDuration(wheel.point_value_seconds))}
+          {@render figure("Expected time per spin", formatDuration(Math.round(expectations.expectedSecondsPerSpin)))}
+          {@render figure("Expected points per spin", formatPoints(Math.round(expectations.expectedPointsPerSpin)))}
         </div>
-      {/each}
-    </div>
+      {/if}
+    </SettingsCard>
+
+    <SettingsCard title="Rules" description="Who can spin, how often a free spin can chain, and how the odds are set.">
+      <div class="space-y-4">
+        <ToggleRow id="wheel-enabled" label="Wheel enabled" status={wheelEnabled ? "On" : "Off"}>
+          <Switch id="wheel-enabled" bind:checked={wheelEnabled} />
+        </ToggleRow>
+        <ToggleRow
+          id="wheel-password-required"
+          label="Require password to spin"
+          status={passwordConfirmationRequired ? "On" : "Off"}
+        >
+          <Switch id="wheel-password-required" bind:checked={passwordConfirmationRequired} />
+        </ToggleRow>
+      </div>
+
+      <div class="mt-6 grid gap-4 border-t pt-6 sm:grid-cols-3">
+        <SettingsField id="wheel-free-spin-cap" label="Free spin cap">
+          <Input id="wheel-free-spin-cap" type="number" class="tabular-nums" bind:value={freeSpinCap} />
+        </SettingsField>
+        <SettingsField
+          id="wheel-bokya-rate"
+          label="Bokya Rate (%)"
+          hint="Natural: {(naturalBokyaRate / 100).toFixed(2)}%. Clear to use natural uniform odds."
+        >
+          <Input
+            id="wheel-bokya-rate"
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            placeholder="Unset"
+            class="tabular-nums"
+            aria-describedby="wheel-bokya-rate-hint"
+            value={bokyaRateInput === "" ? "" : Number(bokyaRateInput) / 100}
+            oninput={(event) => {
+              const value = event.currentTarget.value;
+              bokyaRateInput = value === "" ? "" : String(Math.round(Number(value) * 100));
+            }}
+          />
+        </SettingsField>
+        <SettingsField id="wheel-spin-duration" label="Spin duration (seconds)">
+          <Input id="wheel-spin-duration" type="number" class="tabular-nums" bind:value={spinDuration} />
+        </SettingsField>
+      </div>
+    </SettingsCard>
   </div>
 
-  {#if loadError}
-    <div class="mt-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{loadError}</div>
-  {/if}
-
-  <button
-    class="mt-6 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-    type="button"
-    disabled={wheelBusy}
-    onclick={saveWheel}
+  <SettingsCard
+    title="Segments"
+    description="Slices stay equal in size, so repeat a prize to make it likelier. Odds are the true landing odds under the current unsaved Bokya Rate."
+    flush
   >
-    {wheelBusy ? "Saving…" : "Save"}
-  </button>
+    {#snippet actions()}
+      <Button variant="outline" size="sm" onclick={addSegment}>
+        <PlusIcon aria-hidden="true" />
+        Add segment
+      </Button>
+    {/snippet}
+
+    {#if segments.length === 0}
+      <p class="px-4 py-10 text-center text-sm text-muted-foreground">No segments yet. Add one to build the wheel.</p>
+    {:else}
+      <div
+        class="hidden grid-cols-[2rem_minmax(0,1fr)_6rem_6rem_5rem_minmax(0,1fr)_4.5rem_7rem] items-center gap-x-3 border-b bg-muted/40 px-6 py-2 text-xs font-medium text-muted-foreground xl:grid"
+      >
+        <span>#</span>
+        <span>Label</span>
+        <span>Seconds</span>
+        <span>Points</span>
+        <span>Free spin</span>
+        <span>Prize paid</span>
+        <span class="text-right">Odds</span>
+        <span class="sr-only">Actions</span>
+      </div>
+      <ol class="divide-y">
+        <!-- Below 1280px each segment is a small form; from 1280px it is one
+             row under the column headers. -->
+        {#each segments as seg, i}
+          <li
+            class="grid grid-cols-2 items-end gap-x-3 gap-y-3 px-4 py-3 sm:grid-cols-4 xl:grid-cols-[2rem_minmax(0,1fr)_6rem_6rem_5rem_minmax(0,1fr)_4.5rem_7rem] xl:items-center xl:gap-y-0 xl:px-6"
+          >
+            <div class="col-span-full flex items-center justify-between gap-2 xl:contents">
+              <span class="text-sm font-medium text-muted-foreground tabular-nums xl:col-start-1 xl:row-start-1">
+                <span class="xl:hidden">{"Segment "}</span>{i + 1}
+              </span>
+              <div class="flex items-center xl:col-start-8 xl:row-start-1">
+                <Button variant="ghost" size="icon-sm" aria-label={`Move segment ${i + 1} up`} title="Move up" disabled={i === 0} onclick={() => moveSegment(i, -1)}>
+                  <ArrowUpIcon aria-hidden="true" />
+                </Button>
+                <Button variant="ghost" size="icon-sm" aria-label={`Move segment ${i + 1} down`} title="Move down" disabled={i === segments.length - 1} onclick={() => moveSegment(i, 1)}>
+                  <ArrowDownIcon aria-hidden="true" />
+                </Button>
+                <Button variant="ghost" size="icon-sm" aria-label={`Copy segment ${i + 1}`} title="Copy (makes this prize likelier)" onclick={() => duplicateSegment(i)}>
+                  <CopyIcon aria-hidden="true" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  class="text-muted-foreground hover:text-destructive"
+                  aria-label={`Remove segment ${i + 1}`}
+                  title="Remove"
+                  onclick={() => removeSegment(i)}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                </Button>
+              </div>
+            </div>
+            <div class="col-span-2 grid gap-1 xl:col-span-1 xl:col-start-2 xl:row-start-1">
+              <span class="text-xs text-muted-foreground xl:hidden" aria-hidden="true">Label</span>
+              <Input aria-label={`Label for segment ${i + 1}`} placeholder="Label" bind:value={seg.label} />
+            </div>
+            <div class="grid gap-1 xl:col-start-3 xl:row-start-1">
+              <span class="text-xs text-muted-foreground xl:hidden" aria-hidden="true">Seconds</span>
+              <Input type="number" class="tabular-nums" aria-label={`Seconds for ${seg.label || `segment ${i + 1}`}`} placeholder="Seconds" bind:value={seg.seconds} />
+            </div>
+            <div class="grid gap-1 xl:col-start-4 xl:row-start-1">
+              <span class="text-xs text-muted-foreground xl:hidden" aria-hidden="true">Points</span>
+              <Input inputmode="decimal" class="tabular-nums" aria-label={`Points for ${seg.label || `segment ${i + 1}`}`} placeholder="Points" bind:value={pointInputs[i]} />
+            </div>
+            <label class="flex min-h-11 items-center gap-2 text-sm md:min-h-8 xl:col-start-5 xl:row-start-1">
+              <input type="checkbox" class="size-4 accent-primary" bind:checked={seg.free_spin} />
+              <span class="xl:sr-only">Free spin</span>
+            </label>
+            <!-- True landing probability, before the prize so phones pair it
+                 with the Free spin box and give the prize its own line. -->
+            <p class="self-center text-right text-sm tabular-nums xl:col-start-7 xl:row-start-1">
+              <span class="mr-1 text-xs text-muted-foreground xl:hidden">Odds</span>
+              <span class="font-mono">{(expectations.probabilityPercent[i] ?? 0).toFixed(2)}%</span>
+            </p>
+            <!-- What this slice actually pays, echoed back from the same
+                 derivation the customer sees on the wheel. -->
+            <p class="col-span-2 min-w-0 truncate text-sm font-medium xl:col-span-1 xl:col-start-6 xl:row-start-1" title="Prize paid by this slice">
+              <span class="mr-1 text-xs font-normal text-muted-foreground xl:hidden">Pays</span>
+              {previewSegments[i] ? formatPrizeLine(previewSegments[i]) : ""}
+            </p>
+          </li>
+        {/each}
+      </ol>
+    {/if}
+
+    {#snippet footer()}
+      <p class="mr-auto text-xs text-muted-foreground max-md:basis-full">Saves the rules and segments together.</p>
+      <Button disabled={wheelBusy} onclick={saveWheel}>
+        {wheelBusy ? "Saving…" : "Save wheel"}
+      </Button>
+    {/snippet}
+  </SettingsCard>
 </div>

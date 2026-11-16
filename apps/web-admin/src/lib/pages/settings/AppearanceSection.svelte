@@ -7,6 +7,10 @@
   import { applyThemeRecord } from "../../theme";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import { Button } from "../../components/ui/button";
+  import Notice from "../../components/settings/Notice.svelte";
+  import { Dialog } from "bits-ui";
+  import SettingsCard from "../../components/settings/SettingsCard.svelte";
+  import CheckIcon from "@lucide/svelte/icons/check";
   import type { ThemeRecord } from "../../types";
 
   let themeDraft = $state<ThemeRecord | null>(null);
@@ -113,71 +117,128 @@
   });
 </script>
 
-<div class="space-y-5">
-  <div>
-    <h3 class="text-lg font-semibold">Appearance</h3>
-    <p class="text-sm text-muted-foreground">Preview a shop-wide accent and choose each surface mode before applying.</p>
-  </div>
+<div class="space-y-6">
   {#if !themeDraft || !generatedTheme}
-    <div class="rounded-lg border bg-card p-6 text-sm text-muted-foreground">Loading…</div>
+    {#if themeLoadError}
+      <Notice tone="danger"><p>{themeLoadError}</p></Notice>
+    {:else}
+      <p class="rounded-lg border bg-card px-4 py-10 text-center text-sm text-muted-foreground">Loading appearance…</p>
+    {/if}
   {:else}
-    <section class="rounded-xl border bg-card p-5 shadow-sm">
-      <div class="flex flex-wrap items-center gap-4">
-        <label class="relative block size-16 shrink-0 cursor-pointer rounded-full border-4 border-background shadow ring-1 ring-border" style={`background:${themeDraft.accent_color}`} title="Choose accent color">
-          <span class="sr-only">Choose accent color</span>
-          <input id="theme-accent" type="color" class="absolute inset-0 cursor-pointer opacity-0" value={themeDraft.accent_color} oninput={(event) => updateAccent(event.currentTarget.value)} />
-        </label>
-        <div class="min-w-36">
-          <div class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shop accent</div>
-          <div class="mt-1 font-mono text-lg font-semibold uppercase">{themeDraft.accent_color}</div>
-          <button type="button" class="mt-1 text-xs font-medium text-primary underline-offset-4 hover:underline" onclick={() => updateAccent("#15803d")}>Reset to default green</button>
+    <SettingsCard title="Shop accent" description="One shop-wide colour. Preview it on each surface below before applying.">
+      <div class="flex flex-wrap items-center gap-x-8 gap-y-5">
+        <div class="flex items-center gap-4">
+          <label
+            class="relative block size-14 shrink-0 cursor-pointer rounded-full border-4 border-background shadow ring-1 ring-border focus-within:ring-3 focus-within:ring-ring/50"
+            style={`background:${themeDraft.accent_color}`}
+            title="Choose accent color"
+          >
+            <span class="sr-only">Choose accent color</span>
+            <input
+              id="theme-accent"
+              type="color"
+              class="absolute inset-0 cursor-pointer opacity-0"
+              value={themeDraft.accent_color}
+              oninput={(event) => updateAccent(event.currentTarget.value)}
+            />
+          </label>
+          <div>
+            <p class="font-mono text-base font-semibold uppercase">{themeDraft.accent_color}</p>
+            <Button variant="link" class="h-auto px-0 text-xs text-foreground underline decoration-muted-foreground underline-offset-4 hover:decoration-foreground" onclick={() => updateAccent("#15803d")}>
+              Reset to default green
+            </Button>
+          </div>
         </div>
-        <div class="flex flex-1 flex-wrap gap-2 sm:justify-end">
+
+        <div class="flex flex-wrap gap-1" role="group" aria-label="Accent presets">
           {#each themePresets as preset (preset.color)}
-            <button type="button" class="group flex flex-col items-center gap-1 text-[11px] text-muted-foreground" title={preset.label} aria-label={`Use ${preset.label} accent`} onclick={() => updateAccent(preset.color)}>
-              <span class="size-8 rounded-full border-2 shadow-sm transition-transform group-hover:scale-110" class:border-foreground={themeDraft.accent_color === preset.color} class:border-background={themeDraft.accent_color !== preset.color} style={`background:${preset.color}`}></span>
+            {@const selected = themeDraft.accent_color === preset.color}
+            <button
+              type="button"
+              class="flex min-w-14 flex-col items-center gap-1.5 rounded-lg px-1.5 py-2 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50"
+              class:text-foreground={selected}
+              aria-label={`Use ${preset.label} accent`}
+              aria-pressed={selected}
+              onclick={() => updateAccent(preset.color)}
+            >
+              <span
+                class="flex size-8 items-center justify-center rounded-full text-white shadow-sm ring-offset-2 ring-offset-card"
+                class:ring-2={selected}
+                class:ring-foreground={selected}
+                style={`background:${preset.color}`}
+              >
+                {#if selected}<CheckIcon class="size-4" aria-hidden="true" />{/if}
+              </span>
               {preset.label}
             </button>
           {/each}
         </div>
       </div>
-    </section>
+    </SettingsCard>
 
-    <div class="grid gap-4 xl:grid-cols-3">
+    <!-- Shared header/body tracks keep controls and previews aligned even
+         when one surface description wraps onto an extra line. -->
+    <div class="grid gap-6 xl:grid-cols-3 xl:gap-y-0">
       {#each themeSurfaces as surface (surface.key)}
         {@const mode = themeDraft[surface.key]}
         {@const tokens = generatedTheme.tokens[mode]}
-        <section class="overflow-hidden rounded-xl border bg-card shadow-sm">
-          <header class="flex items-start justify-between gap-3 border-b p-4">
-            <div><h4 class="font-semibold">{surface.label}</h4><p class="text-xs text-muted-foreground">{surface.description}</p></div>
-            <div class="flex rounded-md bg-muted p-1" aria-label={`${surface.label} mode`}>
+        <SettingsCard
+          title={surface.label}
+          description={surface.description}
+          class="xl:row-span-2 xl:grid xl:grid-rows-subgrid xl:[&>header]:flex-col xl:[&>header>div:first-child]:basis-auto"
+        >
+          {#snippet actions()}
+            <div class="flex rounded-lg border bg-muted p-0.5" role="group" aria-label={`${surface.label} mode`}>
               {#each ["light", "dark"] as option}
-                <button type="button" class="rounded px-2.5 py-1 text-xs font-medium capitalize" class:bg-background={mode === option} class:shadow-sm={mode === option} class:text-muted-foreground={mode !== option} onclick={() => updateSurfaceMode(surface.key, option as ThemeMode)}>{option}</button>
+                <button
+                  type="button"
+                  class="min-h-11 rounded-md px-3 text-xs font-medium capitalize outline-none focus-visible:ring-3 focus-visible:ring-ring/50 md:min-h-7"
+                  class:bg-background={mode === option}
+                  class:shadow-sm={mode === option}
+                  class:text-foreground={mode === option}
+                  class:text-muted-foreground={mode !== option}
+                  aria-pressed={mode === option}
+                  onclick={() => updateSurfaceMode(surface.key, option as ThemeMode)}
+                >
+                  {option}
+                </button>
               {/each}
             </div>
-          </header>
-          <div class="p-4">
-            <div class="h-52 overflow-hidden rounded-lg border text-[10px]" style={previewStyle(tokens, mode)}>
+          {/snippet}
+
+          <!-- A picture of the surface, not part of the page: hidden from
+               assistive tech and unreachable by keyboard. Its "buttons" are
+               spans so the phone touch-size rule for real buttons cannot
+               resize them and push the picture out of its frame. -->
+          <div class="h-52 overflow-hidden rounded-lg border text-[10px]" style={previewStyle(tokens, mode)} aria-hidden="true" inert>
               {#if surface.key === "mode_web_admin"}
                 <div class="flex h-full bg-[var(--preview-background)] text-[var(--preview-foreground)]">
-                  <aside class="w-16 bg-[var(--preview-muted)] p-2"><div class="mb-3 h-3 rounded bg-[var(--preview-sidebar-primary)]"></div>{#each [1,2,3,4] as item}<div class="mb-2 h-2 rounded bg-[var(--preview-border)]"></div>{/each}</aside>
-                  <main class="flex-1 p-3"><div class="mb-2 font-semibold">Dashboard</div><div class="rounded border border-[var(--preview-border)] p-2"><span class="text-[8px] opacity-60">Revenue</span><div class="text-base font-bold">₱2,480</div><div class="mt-3 flex h-14 items-end gap-1">{#each [35,55,42,78,62,90] as height, i}<div class="flex-1 rounded-t" style={`height:${height}%;background:var(--preview-chart-${(i % 5) + 1})`}></div>{/each}</div></div><button class="mt-3 rounded bg-[var(--preview-primary)] px-3 py-1 text-[var(--preview-primary-foreground)]">View report</button></main>
+                  <div class="w-16 shrink-0 bg-[var(--preview-muted)] p-2"><div class="mb-3 h-3 rounded bg-[var(--preview-sidebar-primary)]"></div>{#each [1,2,3,4] as item}<div class="mb-2 h-2 rounded bg-[var(--preview-border)]"></div>{/each}</div>
+                  <div class="min-w-0 flex-1 p-3"><div class="mb-2 font-semibold">Dashboard</div><div class="rounded border border-[var(--preview-border)] p-2"><span class="text-[8px] opacity-60">Revenue</span><div class="text-base font-bold">₱2,480</div><div class="mt-3 flex h-12 items-end gap-1">{#each [35,55,42,78,62,90] as height, i}<div class="flex-1 rounded-t" style={`height:${height}%;background:var(--preview-chart-${(i % 5) + 1})`}></div>{/each}</div></div><span class="mt-3 inline-block rounded bg-[var(--preview-primary)] px-3 py-1 text-[var(--preview-primary-foreground)]">View report</span></div>
                 </div>
               {:else if surface.key === "mode_kiosk"}
                 <div class="h-full bg-[var(--preview-background)] p-3 text-[var(--preview-foreground)]"><div class="mb-3 flex justify-between"><b>SELECT A PC</b><span class="text-[var(--preview-primary)]">OPENPISO</span></div>{#each [["PC 01","1:24:08"],["PC 02","AVAILABLE"],["PC 03","42:16"]] as row, i}<div class="mb-2 flex items-center justify-between rounded border p-2" style={`border-color:${i === 1 ? "var(--preview-primary)" : "var(--preview-border)"}`}><b>{row[0]}</b><span class={i === 1 ? "text-[var(--preview-primary)]" : ""}>{row[1]}</span></div>{/each}<div class="mt-3 h-1.5 rounded bg-[var(--preview-primary)]"></div></div>
               {:else}
-                <div class="flex h-full flex-col items-center justify-center bg-[var(--preview-background)] text-[var(--preview-foreground)]"><div class="mb-1 text-[8px] uppercase tracking-widest opacity-60">Remaining time</div><div class="text-3xl font-bold tabular-nums">01:24:08</div><button class="mt-5 rounded bg-[var(--preview-primary)] px-5 py-2 font-semibold text-[var(--preview-primary-foreground)]">INSERT COIN</button><span class="mt-2 text-[8px] opacity-60">or log in to your account</span></div>
+                <div class="flex h-full flex-col items-center justify-center bg-[var(--preview-background)] text-[var(--preview-foreground)]"><div class="mb-1 text-[8px] uppercase tracking-widest opacity-60">Remaining time</div><div class="text-3xl font-bold tabular-nums">01:24:08</div><span class="mt-5 inline-block rounded bg-[var(--preview-primary)] px-5 py-2 font-semibold text-[var(--preview-primary-foreground)]">INSERT COIN</span><span class="mt-2 text-[8px] opacity-60">or log in to your account</span></div>
               {/if}
-            </div>
           </div>
-        </section>
+        </SettingsCard>
       {/each}
     </div>
 
-    <div class="flex flex-wrap items-center gap-3">
-      <Button type="button" disabled={themeBusy || !themeChanged} onclick={() => void openThemeConfirmation()}>Apply to shop…</Button>
-      {#if themeChanged}<span class="text-sm text-amber-700 dark:text-amber-400">Changes not yet applied</span>{/if}
-      {#if themeLoadError}<span class="text-sm text-destructive">{themeLoadError}</span>{/if}
+    <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-3 rounded-lg border bg-card px-4 py-3 md:px-6">
+      <p class="mr-auto text-xs text-muted-foreground max-md:basis-full">
+        {#if themeChanged}
+          <span class="font-medium text-amber-700 dark:text-amber-400">Changes not yet applied.</span>
+        {/if}
+        Applies the accent and all three surface modes together.
+      </p>
+      {#if themeLoadError}
+        <p class="text-sm text-destructive max-md:basis-full" role="alert">{themeLoadError}</p>
+      {/if}
+      <Button type="button" class="max-md:flex-1" disabled={themeBusy || !themeChanged} onclick={() => void openThemeConfirmation()}>
+        Apply to shop…
+      </Button>
     </div>
   {/if}
 </div>
@@ -207,7 +268,7 @@
         </div>
       </div>
       <div class="mt-4 grid grid-cols-3 gap-2">{#each themeSurfaces as surface}<div class="rounded-md bg-muted p-2 text-center"><div class="text-xs text-muted-foreground">{surface.label}</div><div class="text-sm font-semibold capitalize">{themeDraft[surface.key]}</div></div>{/each}</div>
-      <div class="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-200"><strong>Live update:</strong> Client PCs will re-theme immediately, including during active sessions. Timers and sessions are not interrupted.</div>
+      <Notice tone="warning" class="mt-4"><p><strong>Live update:</strong> Client PCs will re-theme immediately, including during active sessions. Timers and sessions are not interrupted.</p></Notice>
       <div class="mt-6 flex justify-end gap-3"><Button type="button" variant="outline" disabled={themeBusy} onclick={() => (themeConfirmOpen = false)}>Cancel</Button><Button type="button" disabled={themeBusy} onclick={() => void saveTheme()}>{themeBusy ? "Applying…" : "Apply to shop"}</Button></div>
     {/if}
   {/snippet}
@@ -219,10 +280,21 @@
       </Sheet.Content>
     </Sheet.Root>
   {:else}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="presentation" onclick={(event) => { if (event.target === event.currentTarget && !themeBusy) themeConfirmOpen = false; }}>
-      <div class="w-full max-w-lg rounded-xl border bg-background p-6 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="theme-confirm-title">
-        {@render themeDialogBody()}
-      </div>
-    </div>
+    <!-- bits-ui Dialog (the primitive under Sheet) supplies the focus trap,
+         initial focus, Escape, and focus restoration. Escape and backdrop
+         clicks are ignored while the theme is being applied. -->
+    <Dialog.Root open onOpenChange={(open) => { if (!open && !themeBusy) themeConfirmOpen = false; }}>
+      <Dialog.Portal>
+        <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+        <Dialog.Content
+          aria-labelledby="theme-confirm-title"
+          escapeKeydownBehavior={themeBusy ? "ignore" : "close"}
+          interactOutsideBehavior={themeBusy ? "ignore" : "close"}
+          class="fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border bg-card p-6 shadow-lg outline-none"
+        >
+          {@render themeDialogBody()}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   {/if}
 {/if}

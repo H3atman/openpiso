@@ -2,6 +2,13 @@
   import { onMount } from "svelte";
   import * as api from "../../api";
   import ConfirmDialog from "../../components/ConfirmDialog.svelte";
+  import { Button } from "../../components/ui/button";
+  import { Input } from "../../components/ui/input";
+  import Notice from "../../components/settings/Notice.svelte";
+  import SettingsCard from "../../components/settings/SettingsCard.svelte";
+  import StatePill from "../../components/settings/StatePill.svelte";
+  import CheckIcon from "@lucide/svelte/icons/check";
+  import UnplugIcon from "@lucide/svelte/icons/unplug";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import type {
     DetectedTelegramChat,
@@ -171,6 +178,8 @@
     return `${line}. Local Alerts keep the full history.`;
   }
 
+  const connected = $derived(Boolean(status?.platform_supported && status.connected && status.destination));
+
   // The single confirmed destination when exactly one private chat was found,
   // or the manually typed fallback id otherwise.
   const readyToConnect = $derived(
@@ -181,189 +190,251 @@
   );
 </script>
 
-<div class="rounded-lg border bg-card p-6">
-  <h3 class="mb-4 text-lg font-semibold">Telegram Alerts</h3>
+{#snippet pinField(id: string)}
+  <div class="mt-4 grid gap-1.5">
+    <label class="text-sm font-medium text-foreground" for={id}>Current Web Admin PIN</label>
+    <Input
+      {id}
+      type="password"
+      autocomplete="current-password"
+      placeholder="Enter current PIN"
+      aria-invalid={pinError ? true : undefined}
+      aria-describedby={pinError ? `${id}-error` : undefined}
+      bind:value={pin}
+    />
+    {#if pinError}
+      <p id="{id}-error" class="text-xs text-destructive">{pinError}</p>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet step(number: number, title: string, done: boolean)}
+  <span
+    class="flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold tabular-nums {done
+      ? 'border-primary bg-primary text-primary-foreground'
+      : 'bg-background text-muted-foreground'}"
+    aria-hidden="true"
+  >
+    {#if done}<CheckIcon class="size-3.5" />{:else}{number}{/if}
+  </span>
+  <p class="font-medium text-foreground">{title}{#if done}<span class="sr-only"> (done)</span>{/if}</p>
+{/snippet}
+
+<SettingsCard
+  title={connected ? "Connected bot" : "Connect a bot"}
+  description="Alerts go to one private Telegram chat that you choose."
+>
+  {#snippet actions()}
+    {#if status?.platform_supported}
+      <StatePill on={connected}>{connected ? "Connected" : "Not connected"}</StatePill>
+    {/if}
+  {/snippet}
 
   {#if loadError}
-    <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-      {loadError}
-    </div>
+    <Notice tone="danger">{loadError}</Notice>
   {/if}
 
   {#if status}
-    <p class="mb-4 text-sm text-muted-foreground">
-      Optionally receive PC Monitoring alerts in one private Telegram chat.
-      Outbound only — the bot can never query or control OpenPiso, and the
-      token is stored protected and never shown again. The whole integration
-      is excluded from Backups: after a restore you reconnect here.
-    </p>
+    <ul class="mb-6 grid gap-2 text-sm text-muted-foreground md:grid-cols-3 md:gap-4">
+      <li class="flex gap-2">
+        <CheckIcon class="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+        Outbound only: the bot can never query or control OpenPiso.
+      </li>
+      <li class="flex gap-2">
+        <CheckIcon class="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+        The token is stored protected and never shown again.
+      </li>
+      <li class="flex gap-2">
+        <CheckIcon class="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+        Excluded from Backups: after a restore, you reconnect here.
+      </li>
+    </ul>
 
     {#if !status.platform_supported}
-      <div class="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-        Telegram requires a Windows Admin. This installation cannot protect the
-        bot token and will never manufacture results.
-      </div>
+      <Notice>
+        <p>
+          Telegram requires a Windows Admin. This installation cannot protect the
+          bot token and will never manufacture results.
+        </p>
+      </Notice>
     {:else if status.connected && status.destination}
-      <div class="space-y-3">
-        <div class="text-sm">
-          <span class="font-medium">Connected:</span>
-          @{status.destination.bot_username} — {status.destination.chat_title}
-          <span class="text-muted-foreground">(chat {status.destination.chat_id})</span>
-        </div>
-        {#if status.last_test}
-          <div class="text-sm text-muted-foreground">
-            Last successful test: {new Date(status.last_test.verified_at).toLocaleString()}
+      <div class="space-y-6 border-t pt-6">
+        <dl class="grid gap-4 text-sm sm:grid-cols-2">
+          <div class="min-w-0">
+            <dt class="text-muted-foreground">Bot</dt>
+            <dd class="mt-1 truncate font-medium">@{status.destination.bot_username}</dd>
           </div>
+          <div class="min-w-0">
+            <dt class="text-muted-foreground">Chat</dt>
+            <dd class="mt-1 font-medium">
+              {status.destination.chat_title}
+              <span class="font-normal text-muted-foreground tabular-nums">(chat {status.destination.chat_id})</span>
+            </dd>
+          </div>
+        </dl>
+        {#if status.last_test}
+          <p class="text-sm text-muted-foreground">
+            Last successful test: {new Date(status.last_test.verified_at).toLocaleString()}
+          </p>
         {/if}
         {#if status.delivery}
-          <div class="rounded-md bg-muted p-3 text-sm" data-testid="delivery-health">
+          {@const delivery = status.delivery}
+          <div class="space-y-1 rounded-lg border bg-muted/40 px-4 py-3 text-sm" data-testid="delivery-health">
             <p class="font-medium">Delivery</p>
             <p class="text-muted-foreground">
-              {status.delivery.last_sent_at
-                ? `Last message delivered: ${new Date(status.delivery.last_sent_at).toLocaleString()}`
+              {delivery.last_sent_at
+                ? `Last message delivered: ${new Date(delivery.last_sent_at).toLocaleString()}`
                 : "No message delivered yet."}
             </p>
-            <p
-              class={status.delivery.expired_count > 0
-                ? "text-destructive"
-                : "text-muted-foreground"}
-            >
-              {deliveryStateLine(status.delivery)}
+            <p class={delivery.expired_count > 0 ? "text-destructive" : "text-muted-foreground"}>
+              {deliveryStateLine(delivery)}
             </p>
-            {#if status.delivery.last_error}
-              <p class="mt-1 text-destructive">
-                {`Last error (${new Date(status.delivery.last_error_at ?? "").toLocaleString()}): ${status.delivery.last_error}`}
+            {#if delivery.last_error}
+              <p class="text-destructive">
+                {`Last error (${new Date(delivery.last_error_at ?? "").toLocaleString()}): ${delivery.last_error}`}
               </p>
             {/if}
           </div>
         {/if}
-        <div class="flex items-center gap-3">
-          <button
-            type="button"
-            class="rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
-            onclick={askDisconnect}
-            disabled={busy}
-          >
-            Disconnect
-          </button>
-          <span class="text-xs text-muted-foreground">
-            Deleting the token and this chat. Local PC Monitoring keeps running.
-          </span>
-        </div>
       </div>
     {:else}
-      <div class="space-y-4 text-sm">
-        <ol class="list-decimal space-y-1 pl-5 text-muted-foreground">
-          <li>
-            Message <strong>@BotFather</strong> on Telegram and create a bot
+      <ol class="space-y-6 border-t pt-6 text-sm">
+        <li class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 gap-y-1">
+          {@render step(1, "Create a bot", Boolean(pendingBot))}
+          <p class="col-start-2 text-muted-foreground">
+            Message <strong class="text-foreground">@BotFather</strong> on Telegram and create a bot
             (<em>/newbot</em>), then copy the token it gives you.
-          </li>
-          <li>Send <em>/start</em> to your new bot from your own account. It must be a private chat sent within the last ten minutes.</li>
-          <li>Paste the token below.</li>
-        </ol>
-
-        {#if pendingBot}
-          <div class="rounded-md bg-muted p-3">
-            Token verified for <strong>@{pendingBot}</strong>.
-            <button
-              type="button"
-              class="ml-2 text-primary underline"
-              onclick={() => {
-                pendingBot = "";
-                detectedChats = [];
-              }}
-            >
-              Use a different token
-            </button>
-          </div>
-          <button
-            type="button"
-            class="rounded-md border px-3 py-1.5 hover:bg-accent"
-            onclick={detect}
-            disabled={detectBusy}
-          >
-            {detectBusy ? "Checking for messages…" : "Look for my message"}
-          </button>
-          {#if detectionError}
-            <div class="rounded-md bg-destructive/10 p-3 text-destructive">{detectionError}</div>
-          {/if}
-          {#if detectedChats.length > 0}
-            <div class="rounded-md bg-muted p-3">
-              <p class="mb-2 font-medium">Private chats that messaged your bot:</p>
-              <ul class="space-y-1">
-                {#each detectedChats as chat (chat.chat_id)}
-                  <li>
-                    {chat.title} <span class="text-muted-foreground">({chat.chat_id})</span>
-                  </li>
-                {/each}
-              </ul>
-              {#if detectedChats.length > 1}
-                <p class="mt-2 text-xs text-muted-foreground">
-                  More than one chat wrote to this bot, so enter your own chat ID below instead.
-                </p>
+          </p>
+        </li>
+        <li class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 gap-y-1">
+          {@render step(2, "Message your bot", false)}
+          <p class="col-start-2 text-muted-foreground">
+            Send <em>/start</em> to your new bot from your own account. It must be a private chat sent within the
+            last ten minutes.
+          </p>
+        </li>
+        <li class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 gap-y-1">
+          {@render step(3, "Paste the token", Boolean(pendingBot))}
+          <div class="col-start-2 mt-1 space-y-3">
+            {#if pendingBot}
+              <p class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>Token verified for <strong>@{pendingBot}</strong>.</span>
+                <Button
+                  variant="link"
+                  class="h-auto px-0"
+                  onclick={() => {
+                    pendingBot = "";
+                    detectedChats = [];
+                  }}
+                >
+                  Use a different token
+                </Button>
+              </p>
+            {:else}
+              <form
+                class="flex max-w-xl gap-2 max-sm:flex-col"
+                onsubmit={(event) => {
+                  event.preventDefault();
+                  void verifyToken();
+                }}
+              >
+                <label class="sr-only" for="telegram-token">Bot token</label>
+                <Input
+                  id="telegram-token"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="Paste your BotFather token"
+                  class="flex-1"
+                  bind:value={tokenInput}
+                />
+                <Button type="submit" variant="outline" disabled={busy || !tokenInput.trim()}>Verify token</Button>
+              </form>
+              {#if setupError}
+                <Notice tone="danger">{setupError}</Notice>
               {/if}
-            </div>
-          {/if}
-          <label class="flex items-center gap-2 text-xs text-muted-foreground">
-            <input type="checkbox" bind:checked={useManualChatId} />
-            Enter chat ID manually
-          </label>
-          {#if useManualChatId}
-            <input
-              type="text"
-              inputmode="numeric"
-              placeholder="Numeric private chat ID"
-              class="block w-56 rounded-md border bg-background px-3 py-2"
-              bind:value={manualChatId}
-            />
-          {/if}
-          <div>
-            <button
-              type="button"
-              class="rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground disabled:opacity-50"
-              onclick={askConnect}
-              disabled={!readyToConnect || busy}
-            >
-              Send test &amp; connect
-            </button>
-            {#if !readyToConnect}
-              <span class="ml-2 text-xs text-muted-foreground">
-                Look for your message first{useManualChatId ? " or type your chat ID" : ""}.
-              </span>
             {/if}
           </div>
-          {#if setupError}
-            <div class="rounded-md bg-destructive/10 p-3 text-destructive">{setupError}</div>
+        </li>
+        <li class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 gap-y-1" class:opacity-60={!pendingBot}>
+          {@render step(4, "Find your chat and connect", false)}
+          {#if pendingBot}
+            <div class="col-start-2 mt-1 space-y-3">
+              <Button variant="outline" onclick={detect} disabled={detectBusy}>
+                {detectBusy ? "Checking for messages…" : "Look for my message"}
+              </Button>
+              {#if detectionError}
+                <Notice tone="danger">{detectionError}</Notice>
+              {/if}
+              {#if detectedChats.length > 0}
+                <div class="rounded-lg border bg-muted/40 px-4 py-3">
+                  <p class="mb-2 font-medium">Private chats that messaged your bot:</p>
+                  <ul class="space-y-1">
+                    {#each detectedChats as chat (chat.chat_id)}
+                      <li>
+                        {chat.title} <span class="text-muted-foreground tabular-nums">({chat.chat_id})</span>
+                      </li>
+                    {/each}
+                  </ul>
+                  {#if detectedChats.length > 1}
+                    <p class="mt-2 text-xs text-muted-foreground">
+                      More than one chat wrote to this bot, so enter your own chat ID below instead.
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+              <label class="flex min-h-11 w-fit items-center gap-2 text-sm md:min-h-0">
+                <input type="checkbox" class="size-4 accent-primary" bind:checked={useManualChatId} />
+                Enter chat ID manually
+              </label>
+              {#if useManualChatId}
+                <Input
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="Numeric private chat ID"
+                  aria-label="Chat ID"
+                  class="max-w-56 tabular-nums"
+                  bind:value={manualChatId}
+                />
+              {/if}
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <Button onclick={askConnect} disabled={!readyToConnect || busy}>Send test &amp; connect</Button>
+                {#if !readyToConnect}
+                  <span class="text-xs text-muted-foreground">
+                    Look for your message first{useManualChatId ? " or type your chat ID" : ""}.
+                  </span>
+                {/if}
+              </div>
+              {#if setupError}
+                <Notice tone="danger">{setupError}</Notice>
+              {/if}
+            </div>
+          {:else}
+            <p class="col-start-2 text-muted-foreground">Available once the token is verified.</p>
           {/if}
-        {:else}
-          <div class="flex items-center gap-2 max-md:flex-col max-md:items-start">
-            <input
-              id="telegram-token"
-              type="password"
-              autocomplete="off"
-              placeholder="Paste your BotFather token"
-              class="block w-80 rounded-md border bg-background px-3 py-2 max-md:w-full"
-              bind:value={tokenInput}
-            />
-            <button
-              type="button"
-              class="rounded-md border px-3 py-1.5 hover:bg-accent"
-              onclick={verifyToken}
-              disabled={busy || !tokenInput.trim()}
-            >
-              Verify token
-            </button>
-          </div>
-          {#if setupError}
-            <div class="rounded-md bg-destructive/10 p-3 text-destructive">{setupError}</div>
-          {/if}
-        {/if}
-      </div>
+        </li>
+      </ol>
     {/if}
   {:else if !loadError}
-    <div class="text-sm text-muted-foreground">Loading Telegram state…</div>
+    <p class="text-sm text-muted-foreground">Loading Telegram state…</p>
   {/if}
-</div>
+
+  {#snippet footer()}
+    {#if connected}
+      <p class="mr-auto text-xs text-muted-foreground max-md:basis-full">
+        Deletes the token and this chat. Local PC Monitoring keeps running.
+      </p>
+      <Button
+        variant="outline"
+        class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+        onclick={askDisconnect}
+        disabled={busy}
+      >
+        <UnplugIcon aria-hidden="true" />
+        Disconnect
+      </Button>
+    {/if}
+  {/snippet}
+</SettingsCard>
 
 {#if confirmConnect}
   <ConfirmDialog
@@ -377,22 +448,7 @@
     A test message will be sent to
     <strong>{useManualChatId ? `chat ${manualChatId.trim()}` : "your detected chat"}</strong>.
     The connection becomes active only if it arrives.
-    <div class="mt-3">
-      <label class="block text-sm font-medium" for="telegram-connect-pin">
-        Current Web Admin PIN
-      </label>
-      <input
-        id="telegram-connect-pin"
-        type="password"
-        autocomplete="current-password"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-        placeholder="Enter current PIN"
-        bind:value={pin}
-      />
-      {#if pinError}
-        <p class="mt-1 text-xs text-destructive">{pinError}</p>
-      {/if}
-    </div>
+    {@render pinField("telegram-connect-pin")}
   </ConfirmDialog>
 {/if}
 
@@ -408,21 +464,6 @@
   >
     Deletes the protected token and this chat's delivery, including any
     pending deliveries. Local monitoring and Alert history are unaffected.
-    <div class="mt-3">
-      <label class="block text-sm font-medium" for="telegram-disconnect-pin">
-        Current Web Admin PIN
-      </label>
-      <input
-        id="telegram-disconnect-pin"
-        type="password"
-        autocomplete="current-password"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-        placeholder="Enter current PIN"
-        bind:value={pin}
-      />
-      {#if pinError}
-        <p class="mt-1 text-xs text-destructive">{pinError}</p>
-      {/if}
-    </div>
+    {@render pinField("telegram-disconnect-pin")}
   </ConfirmDialog>
 {/if}

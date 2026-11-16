@@ -92,9 +92,10 @@ describe("Shop Settings", () => {
     await waitFor(() => expect((view.getByLabelText("Amount (whole pesos)") as HTMLInputElement).value).toBe("1"));
 
     expect(Array.from(view.container.querySelectorAll("h3")).map((heading) => heading.textContent?.trim())).toEqual([
-      "Shop",
+      "Shop Details",
       "Shop Rate",
       "Shop Hours",
+      "Shop Override",
     ]);
     const initialPreview = await waitFor(() => view.getByRole("status"));
     expect(initialPreview.textContent?.replace(/\s+/g, " ")).toContain("₱1 buys 5 min.");
