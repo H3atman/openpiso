@@ -18,6 +18,11 @@
   import { Button } from "../../components/ui/button";
   import { Input } from "../../components/ui/input";
   import { Switch } from "../../components/ui/switch";
+  import Notice from "../../components/settings/Notice.svelte";
+  import SettingsCard from "../../components/settings/SettingsCard.svelte";
+  import SettingsField from "../../components/settings/SettingsField.svelte";
+  import StatePill from "../../components/settings/StatePill.svelte";
+  import ToggleRow from "../../components/settings/ToggleRow.svelte";
   import type {
     AttendanceEconomicsAdvisory,
     AttendanceSettings,
@@ -101,6 +106,12 @@
   let canCommit = $derived(
     settings !== null && changed && !draft.error && preview !== null && !busy,
   );
+
+  // Which fields the draft error refers to, so each can be marked invalid.
+  // Number inputs bind numbers, so they are stringified before the check.
+  let thresholdInvalid = $derived(parsePesosToCents(thresholdPesos) === null);
+  let rewardInvalid = $derived(!/^\d+$/.test(String(rewardMinutes)));
+  let claimWindowInvalid = $derived(!/^\d+$/.test(String(claimWindowMonths)));
 
   async function refreshPreview(input: AttendanceSettingsDraft, sequence: number) {
     previewError = "";
@@ -188,155 +199,182 @@
   });
 </script>
 
-<div class="grid items-start gap-6 xl:grid-cols-2">
-  <section class="rounded-lg border bg-card p-6" aria-labelledby="attendance-exposure-heading">
-    <div class="mb-4">
-      <h3 id="attendance-exposure-heading" class="text-lg font-semibold">Current Attendance Exposure</h3>
-      <p class="text-sm text-muted-foreground">
-        Active settings and Outstanding Attendance Time are shop-wide, independent of report filters.
-      </p>
-    </div>
+{#snippet fact(label: string, value: string)}
+  <div class="min-w-0">
+    <p class="text-sm text-muted-foreground">{label}</p>
+    <p class="mt-1 font-semibold tabular-nums">{value}</p>
+  </div>
+{/snippet}
+
+<div class="space-y-6">
+  <SettingsCard
+    title="Current Attendance Exposure"
+    description="Active settings and Outstanding Attendance Time are shop-wide, independent of report filters."
+  >
+    {#snippet actions()}
+      {#if settings}
+        <StatePill on={settings.enabled}>{settings.enabled ? "Enabled" : "Disabled"}</StatePill>
+      {/if}
+    {/snippet}
 
     {#if loadError}
-      <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">{loadError}</div>
+      <Notice tone="danger" role="alert">{loadError}</Notice>
     {:else if settings}
-      <div class="grid gap-3 sm:grid-cols-2">
-        <div class="rounded-md bg-muted p-4">
-          <p class="text-xs text-muted-foreground">Attendance Reward</p>
-          <div class="mt-2"><Badge variant={settings.enabled ? "default" : "secondary"}>{settings.enabled ? "Enabled" : "Disabled"}</Badge></div>
-        </div>
-        <div class="rounded-md bg-muted p-4">
-          <p class="text-xs text-muted-foreground">Daily threshold</p>
-          <p class="mt-2 font-mono font-semibold">{formatMoney(settings.daily_threshold_cents)}</p>
-        </div>
-        <div class="rounded-md bg-muted p-4">
-          <p class="text-xs text-muted-foreground">Reward</p>
-          <p class="mt-2 font-semibold">{formatProseDuration(settings.reward_seconds)}</p>
-        </div>
-        <div class="rounded-md bg-muted p-4">
-          <p class="text-xs text-muted-foreground">Claim window</p>
-          <p class="mt-2 font-semibold">{settings.claim_window_months} {settings.claim_window_months === 1 ? "month" : "months"}</p>
+      <div class="grid gap-x-6 gap-y-4 sm:grid-cols-3">
+        {@render fact("Daily threshold", formatMoney(settings.daily_threshold_cents))}
+        {@render fact("Reward", formatProseDuration(settings.reward_seconds))}
+        {@render fact(
+          "Claim window",
+          `${settings.claim_window_months} ${settings.claim_window_months === 1 ? "month" : "months"}`,
+        )}
+      </div>
+
+      <div class="mt-6 grid gap-x-6 gap-y-4 border-t pt-6 sm:grid-cols-3">
+        {@render fact("Outstanding Attendance Time", formatProseDuration(settings.liability.outstanding_seconds))}
+        {@render fact("Claimable Attendance Time", formatProseDuration(settings.liability.claimable_seconds))}
+        <div class="min-w-0">
+          <p class="text-sm text-muted-foreground">Current Attendance Effective Bonus</p>
+          <p class="mt-1 flex flex-wrap items-center gap-2 font-mono text-lg font-semibold tabular-nums">
+            {bonusLabel(settings.economics_advisory)}
+            {#if settings.economics_advisory?.unsafe_bonus}
+              <Badge variant="destructive">Unsafe</Badge>
+            {/if}
+          </p>
+          <p class="mt-1 text-sm text-muted-foreground">{boughtGivenSentence(settings.economics_advisory)}</p>
         </div>
       </div>
 
-      <div class="mt-4 grid gap-3 sm:grid-cols-2">
-        <div class="rounded-md border p-3 text-sm">
-          <p class="text-muted-foreground">Outstanding Attendance Time</p>
-          <p class="mt-1 font-semibold">{formatProseDuration(settings.liability.outstanding_seconds)}</p>
-        </div>
-        <div class="rounded-md border p-3 text-sm">
-          <p class="text-muted-foreground">Claimable Attendance Time</p>
-          <p class="mt-1 font-semibold">{formatProseDuration(settings.liability.claimable_seconds)}</p>
-        </div>
-      </div>
-
-      <div class="mt-4 rounded-md border p-4 text-sm">
-        <p class="text-muted-foreground">Current Attendance Effective Bonus</p>
-        <p class="mt-1 font-mono text-lg font-semibold">
-          {bonusLabel(settings.economics_advisory)}
-          {#if settings.economics_advisory?.unsafe_bonus}
-            <Badge variant="destructive" class="ml-2">Unsafe</Badge>
-          {/if}
-        </p>
-        <p class="mt-2 text-muted-foreground">{boughtGivenSentence(settings.economics_advisory)}</p>
-      </div>
-      <p class="mt-3 text-xs text-muted-foreground">
+      <p class="mt-6 text-xs text-muted-foreground">
         Version {settings.version}, effective {formatDate(settings.effective_at)}. Claim window changes begin with the next Earning Month ({settings.next_earning_month}).
       </p>
+    {:else}
+      <p class="py-6 text-center text-sm text-muted-foreground">Loading Attendance settings…</p>
     {/if}
-  </section>
+  </SettingsCard>
 
   {#if settings}
-    <section class="rounded-lg border bg-card p-6" aria-labelledby="attendance-configure-heading">
-      <div class="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h3 id="attendance-configure-heading" class="text-lg font-semibold">Configure Attendance Reward</h3>
-          <p class="text-sm text-muted-foreground">
-            Preview the draft with the active Shop Rate before committing.
-          </p>
-        </div>
-        <div>
-          <label class="flex items-center gap-2 text-sm font-medium" for="attendance-enabled">
-            <Switch id="attendance-enabled" size="sm" bind:checked={enabled} />
-            Enable Attendance Reward
-          </label>
-          <p class="mt-1 max-w-sm text-xs text-muted-foreground">
-            Disabling stops new Attendance Check-Ins; earned Attendance Time remains claimable until its deadline.
-          </p>
-        </div>
-      </div>
+    <SettingsCard
+      title="Configure Attendance Reward"
+      description="Preview the draft with the active Shop Rate before committing."
+    >
+      <div class="space-y-6">
+        <ToggleRow
+          id="attendance-enabled"
+          label="Enable Attendance Reward"
+          description="Disabling stops new Attendance Check-Ins; earned Attendance Time remains claimable until its deadline."
+          status={enabled ? "On" : "Off"}
+        >
+          <Switch id="attendance-enabled" aria-describedby="attendance-enabled-description" bind:checked={enabled} />
+        </ToggleRow>
 
-      <div class="grid gap-4 sm:grid-cols-3">
-        <div>
-          <label for="attendance-threshold" class="mb-1 block text-sm font-medium">Daily threshold (pesos)</label>
-          <Input id="attendance-threshold" aria-label="Daily threshold (pesos)" type="text" inputmode="decimal" bind:value={thresholdPesos} />
-          <p class="mt-1 text-xs text-muted-foreground">Default: ₱10</p>
-        </div>
-        <div>
-          <label for="attendance-reward-minutes" class="mb-1 block text-sm font-medium">Reward minutes</label>
-          <Input id="attendance-reward-minutes" aria-label="Reward minutes" type="number" step="1" bind:value={rewardMinutes} />
-          <p class="mt-1 text-xs text-muted-foreground">Default: 60 minutes</p>
-        </div>
-        <div>
-          <label for="attendance-claim-window" class="mb-1 block text-sm font-medium">Claim window (months)</label>
-          <Input id="attendance-claim-window" aria-label="Claim window (months)" type="number" step="1" bind:value={claimWindowMonths} />
-          <p class="mt-1 text-xs text-muted-foreground">Default: 1 month</p>
-        </div>
-      </div>
-
-      {#if draft.error}
-        <p class="mt-3 text-sm text-destructive" role="alert">{draft.error}</p>
-      {/if}
-
-      <div class="mt-4 rounded-md bg-muted p-4" aria-live="polite">
-        <h4 class="font-semibold">Draft Exposure Preview</h4>
-        {#if preview}
-          <div class="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-            <span>
-              Attendance Effective Bonus:
-              <del aria-label="Active Attendance Effective Bonus">{bonusLabel(settings.economics_advisory)}</del>
-              <span aria-hidden="true"> → </span>
-              <strong>{bonusLabel(preview.economics_advisory)}</strong>
-            </span>
-            <span>Threshold: <strong>{formatMoney(preview.daily_threshold_cents)}</strong></span>
-            <span>Reward: <strong>{formatProseDuration(preview.reward_seconds)}</strong></span>
-            {#if preview.economics_advisory?.unsafe_bonus}
-              <Badge variant="destructive">Unsafe bonus</Badge>
-            {/if}
-          </div>
-          <p class="mt-2 text-sm text-muted-foreground">{boughtGivenSentence(preview.economics_advisory)}</p>
-        {:else}
-          <p class="mt-2 text-sm text-muted-foreground">
-            Active Attendance Effective Bonus:
-            <del aria-label="Active Attendance Effective Bonus">{bonusLabel(settings.economics_advisory)}</del>
-          </p>
-          {#if previewError}
-            <p class="mt-2 text-sm text-destructive" role="alert">{previewError}</p>
-          {:else if changed && !draft.error}
-            <p class="mt-2 text-sm text-muted-foreground" aria-live="polite">Calculating preview…</p>
-          {:else}
-            <p class="mt-2 text-sm text-muted-foreground">Edit a setting to preview its effective bonus before saving.</p>
+        <div class="grid gap-4 border-t pt-6 sm:grid-cols-3">
+          <SettingsField id="attendance-threshold" label="Daily threshold (pesos)" hint="Default: ₱10">
+            <Input
+              id="attendance-threshold"
+              aria-label="Daily threshold (pesos)"
+              aria-invalid={thresholdInvalid || undefined}
+              aria-describedby="attendance-threshold-hint{thresholdInvalid && draft.error ? ' attendance-draft-error' : ''}"
+              type="text"
+              inputmode="decimal"
+              class="tabular-nums"
+              bind:value={thresholdPesos}
+            />
+          </SettingsField>
+          <SettingsField id="attendance-reward-minutes" label="Reward minutes" hint="Default: 60 minutes">
+            <Input
+              id="attendance-reward-minutes"
+              aria-label="Reward minutes"
+              aria-invalid={rewardInvalid || undefined}
+              aria-describedby="attendance-reward-minutes-hint{rewardInvalid && draft.error ? ' attendance-draft-error' : ''}"
+              type="number"
+              step="1"
+              class="tabular-nums"
+              bind:value={rewardMinutes}
+            />
+          </SettingsField>
+          <SettingsField id="attendance-claim-window" label="Claim window (months)" hint="Default: 1 month">
+            <Input
+              id="attendance-claim-window"
+              aria-label="Claim window (months)"
+              aria-invalid={claimWindowInvalid || undefined}
+              aria-describedby="attendance-claim-window-hint{claimWindowInvalid && draft.error ? ' attendance-draft-error' : ''}"
+              type="number"
+              step="1"
+              class="tabular-nums"
+              bind:value={claimWindowMonths}
+            />
+          </SettingsField>
+          {#if draft.error}
+            <p id="attendance-draft-error" class="text-sm text-destructive sm:col-span-3" role="alert">{draft.error}</p>
           {/if}
+        </div>
+
+        <div class="rounded-lg border bg-muted/40 p-4" aria-live="polite">
+          <h4 class="text-sm font-semibold">Draft Exposure Preview</h4>
+          {#if preview}
+            <div class="mt-3 grid gap-4 text-sm sm:grid-cols-3">
+              <div>
+                <p class="text-muted-foreground">Attendance Effective Bonus</p>
+                <p class="mt-1 flex flex-wrap items-center gap-x-2 font-mono tabular-nums">
+                  <del class="text-muted-foreground" aria-label="Active Attendance Effective Bonus">{bonusLabel(settings.economics_advisory)}</del>
+                  <span aria-hidden="true">→</span>
+                  <strong class="text-base">{bonusLabel(preview.economics_advisory)}</strong>
+                  {#if preview.economics_advisory?.unsafe_bonus}
+                    <Badge variant="destructive">Unsafe bonus</Badge>
+                  {/if}
+                </p>
+              </div>
+              <div>
+                <p class="text-muted-foreground">Threshold</p>
+                <p class="mt-1"><strong class="tabular-nums">{formatMoney(preview.daily_threshold_cents)}</strong></p>
+              </div>
+              <div>
+                <p class="text-muted-foreground">Reward</p>
+                <p class="mt-1"><strong>{formatProseDuration(preview.reward_seconds)}</strong></p>
+              </div>
+            </div>
+            <p class="mt-3 text-sm text-muted-foreground">{boughtGivenSentence(preview.economics_advisory)}</p>
+          {:else}
+            <p class="mt-2 text-sm text-muted-foreground">
+              Active Attendance Effective Bonus:
+              <span aria-label="Active Attendance Effective Bonus">{bonusLabel(settings.economics_advisory)}</span>
+            </p>
+            {#if previewError}
+              <p class="mt-2 text-sm text-destructive" role="alert">{previewError}</p>
+            {:else if changed && !draft.error}
+              <p class="mt-2 text-sm text-muted-foreground">Calculating preview…</p>
+            {:else}
+              <p class="mt-2 text-sm text-muted-foreground">Edit a setting to preview its effective bonus before saving.</p>
+            {/if}
+          {/if}
+        </div>
+
+        <Notice>
+          <p>Existing daily snapshots are unchanged; threshold and reward edits apply to the next unfrozen daily snapshot.</p>
+        </Notice>
+
+        <div>
+          <h4 class="text-sm font-semibold">When this commit takes effect</h4>
+          <ul class="mt-2 grid gap-x-6 gap-y-1.5 text-sm text-muted-foreground sm:grid-cols-2">
+            <li>Enable or disable: {effectiveChangeLabel(settings.effective_changes.enabled)}</li>
+            <li>Daily threshold: {effectiveChangeLabel(settings.effective_changes.daily_threshold_cents)}</li>
+            <li>Reward minutes: {effectiveChangeLabel(settings.effective_changes.reward_minutes)}</li>
+            <li>Claim window: {effectiveChangeLabel(settings.effective_changes.claim_window_months)}</li>
+          </ul>
+        </div>
+      </div>
+
+      {#snippet footer()}
+        <!-- Re-narrows `settings`: snippet closures do not inherit the outer {#if}. -->
+        {#if settings}
+          <p class="mr-auto text-xs text-muted-foreground max-md:basis-full">
+            {changed ? `Commits these settings as version ${settings.version + 1}.` : "No changes to commit."}
+          </p>
+          <Button disabled={!canCommit} onclick={saveSettings}>
+            {busy ? "Saving…" : `Commit v${settings.version + 1}`}
+          </Button>
         {/if}
-      </div>
-
-      <p class="mt-4 rounded-md border p-3 text-sm text-muted-foreground">
-        Existing daily snapshots are unchanged; threshold and reward edits apply to the next unfrozen daily snapshot.
-      </p>
-
-      <div class="mt-4 rounded-md border p-4">
-        <h4 class="font-semibold">When this commit takes effect</h4>
-        <ul class="mt-2 grid gap-1 text-sm text-muted-foreground sm:grid-cols-2">
-          <li>Enable or disable: {effectiveChangeLabel(settings.effective_changes.enabled)}</li>
-          <li>Daily threshold: {effectiveChangeLabel(settings.effective_changes.daily_threshold_cents)}</li>
-          <li>Reward minutes: {effectiveChangeLabel(settings.effective_changes.reward_minutes)}</li>
-          <li>Claim window: {effectiveChangeLabel(settings.effective_changes.claim_window_months)}</li>
-        </ul>
-      </div>
-
-      <Button class="mt-5" disabled={!canCommit} onclick={saveSettings}>
-        {busy ? "Saving…" : `Commit v${settings.version + 1}`}
-      </Button>
-    </section>
+      {/snippet}
+    </SettingsCard>
   {/if}
 </div>

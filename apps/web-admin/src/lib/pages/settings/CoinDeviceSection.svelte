@@ -2,6 +2,15 @@
   import { onMount } from "svelte";
   import * as api from "../../api";
   import { Badge } from "$lib/components/ui/badge";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import NativeSelect from "$lib/components/settings/NativeSelect.svelte";
+  import Notice from "$lib/components/settings/Notice.svelte";
+  import SettingsCard from "$lib/components/settings/SettingsCard.svelte";
+  import SettingsField from "$lib/components/settings/SettingsField.svelte";
+  import PlusIcon from "@lucide/svelte/icons/plus";
+  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+  import Trash2Icon from "@lucide/svelte/icons/trash-2";
   import { formatMoney, formatTransactionTime } from "../../format";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import type {
@@ -344,280 +353,354 @@
   });
 </script>
 
-<div class="rounded-lg border bg-card p-6">
-  <h3 class="mb-4 text-lg font-semibold">Coin Device Settings</h3>
-
+<div class="space-y-6">
   {#if diagnosticsMode === true}
-    <p class="-mt-2 mb-4 text-sm text-muted-foreground">
-      The coin evidence tools — the Coin Debug Bundle and the Coin Debug
-      Window — moved to
-      <a
-        class="font-medium text-primary hover:underline"
-        href="/admin/diagnostics">Diagnostics</a
-      >.
-    </p>
+    <Notice>
+      <p>
+        The coin evidence tools — the Coin Debug Bundle and the Coin Debug
+        Window — moved to
+        <a
+          class="font-medium text-primary underline-offset-4 hover:underline"
+          href="/admin/diagnostics">Diagnostics</a
+        >.
+      </p>
+    </Notice>
   {/if}
 
-  <fieldset class="contents" disabled={calibrationLocksSettings}>
-    <div class="space-y-4">
-    <div>
-      <label class="block text-sm font-medium" for="coin-com-port">COM Port</label>
-      <div class="mt-1 flex gap-2">
-        <select
-          id="coin-com-port"
-          class="block min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm font-mono"
-          value={comPort}
-          onchange={(event) => {
-            const target = event.currentTarget as HTMLSelectElement;
-            comPort = target.value;
-            coinPortUserChanged = true;
-          }}
-        >
-          <option value="">Simulator (no port)</option>
-          {#each displayedCoinPorts as port (port.name)}
-            <option value={port.name}>
-              {port.name} — {port.detected ? port.label : "saved, not detected"}
-            </option>
-          {/each}
-        </select>
-        <button
-          class="rounded-md border bg-card px-3 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-          type="button"
-          disabled={coinPortsBusy}
-          onclick={() => void loadCoinPorts()}
-        >
-          {coinPortsBusy ? "Refreshing…" : "Refresh"}
-        </button>
-      </div>
-      {#if selectedCoinPort && !selectedCoinPort.detected}
-        <p class="mt-2 text-sm text-destructive" role="alert">
-          Saved port {selectedCoinPort.name} was not detected. It remains selectable.
-        </p>
-      {/if}
-      {#if coinPortsError}
-        <div class="mt-2 flex items-center gap-3 text-sm text-destructive" role="alert">
-          <span>{coinPortsError}</span>
-          <button
-            class="font-medium underline disabled:opacity-50"
-            type="button"
-            disabled={coinPortsBusy}
-            onclick={() => void loadCoinPorts()}
-          >
-            Retry
-          </button>
-        </div>
-      {/if}
-    </div>
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div>
-        <label class="block text-sm font-medium" for="coin-baud-rate">Baud Rate</label>
-        <input id="coin-baud-rate" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={baudRate} />
-      </div>
-      <div>
-        <label class="block text-sm font-medium" for="coin-gap-ms">Inter-coin Gap (ms)</label>
-        <input id="coin-gap-ms" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={interCoinGapMs} />
-      </div>
-    </div>
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div>
-        <label class="block text-sm font-medium" for="coin-inactivity">Inactivity Timeout (s)</label>
-        <input id="coin-inactivity" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={inactivityTimeoutSeconds} />
-        <p class="mt-1 text-xs text-muted-foreground">Selection window closes after this idle gap. Default: 15</p>
-      </div>
-      <div>
-        <label class="block text-sm font-medium" for="coin-hard-cap">Hard Cap (s)</label>
-        <input id="coin-hard-cap" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={hardCapSeconds} />
-        <p class="mt-1 text-xs text-muted-foreground">Maximum selection window duration. Default: 180</p>
-      </div>
-    </div>
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div>
-        <label class="block text-sm font-medium" for="coin-set-pin">Set Pin (control)</label>
-        <select id="coin-set-pin" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={setPinLine}>
-          <option value="dtr">DTR</option>
-          <option value="rts">RTS</option>
-        </select>
-      </div>
-      <div>
-        <label class="block text-sm font-medium" for="coin-coin-pin">Coin Pin (status)</label>
-        <select id="coin-coin-pin" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={coinPinLine}>
-          <option value="cts">CTS</option>
-          <option value="dsr">DSR</option>
-          <option value="ri">RI</option>
-          <option value="cd">DCD</option>
-        </select>
-      </div>
-      <div>
-        <label class="block text-sm font-medium" for="coin-pin-polarity">Coin Pin Polarity</label>
-        <select id="coin-pin-polarity" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={coinPinPolarity}>
-          <option value="normally_open">Normally open (pulse high)</option>
-          <option value="normally_closed">Normally closed (pulse low)</option>
-        </select>
-        <p class="mt-1 text-xs text-muted-foreground">Choose Normally closed for acceptors idle high and pulsing low.</p>
-      </div>
-    </div>
-  </div>
-
-  <fieldset class="mt-6" disabled={calibrationRequired}>
-    <div class="mb-2 flex items-center justify-between">
-      <h4 class="text-sm font-semibold">Pulse Map (historical Rejection Credit denominations)</h4>
-      <button class="text-xs text-primary hover:underline" type="button" onclick={addPulseMapEntry}>+ Add</button>
-    </div>
-    <p class="mb-2 text-xs text-muted-foreground">Automatic Coin Batch authority is always 100 cents per pulse. This persisted map is retained for physical calibration and historical Rejection Credit denomination choices.</p>
-    {#if duplicatePulseCounts.length > 0}
-      <p class="mb-2 text-sm text-destructive" role="alert">Duplicate pulse counts: {duplicatePulseCounts.join(", ")}. Each pulse count must be unique.</p>
-    {/if}
-    <div class="space-y-2">
-      {#each pulseMap as entry, i}
-        <div class="flex flex-wrap items-center gap-2 rounded-md border bg-muted/50 p-2">
-          <label class="text-xs">Pulses <input type="number" class="w-20 rounded border bg-background px-2 py-1 text-xs" bind:value={entry.pulse_count} /></label>
-          <span class="text-xs">→</span>
-          <label class="text-xs">Cents <input type="number" class="w-24 rounded border bg-background px-2 py-1 text-xs" bind:value={entry.amount_cents} /></label>
-          <span class="text-xs text-muted-foreground">= {formatMoney(entry.amount_cents)}</span>
-          <button class="text-xs text-destructive hover:underline" type="button" onclick={() => removePulseMapEntry(i)}>Remove</button>
-        </div>
-      {/each}
-    </div>
-    {#if calibrationRequired}
-      <p class="mt-2 text-xs text-muted-foreground">Candidate map locked until physical calibration Apply.</p>
-    {/if}
-  </fieldset>
-  </fieldset>
-
   {#if coinLoadError}
-    <div class="mt-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{coinLoadError}</div>
+    <Notice tone="danger">{coinLoadError}</Notice>
   {/if}
 
   {#if calibrationRequired}
-    <div class="mt-6 rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+    <Notice
+      tone="warning"
+      title={hasTwentyMapping ? "₱20 mapping is a calibration candidate" : "₱20 mapping needs physical calibration"}
+    >
       {#if hasTwentyMapping}
-        <p class="font-medium">₱20 mapping is a calibration candidate</p>
-        <p class="mt-1 text-muted-foreground">A configured 20-pulse row is not proof of this acceptor's physical output. Complete five genuine ₱20 samples before serving customers.</p>
+        <p>A configured 20-pulse row is not proof of this acceptor's physical output. Complete five genuine ₱20 samples before serving customers.</p>
       {:else}
-        <p class="font-medium">₱20 mapping needs physical calibration</p>
-        <p class="mt-1 text-muted-foreground">Calibrate with five genuine ₱20 coins before serving customers.</p>
+        <p>Calibrate with five genuine ₱20 coins before serving customers.</p>
       {/if}
-      <p class="mt-3 text-xs text-muted-foreground">Use the Coin Calibration panel below to choose the target amount and begin the exclusive capture.</p>
-    </div>
+      <p>Use Coin Calibration below to choose the target amount and begin the exclusive capture.</p>
+    </Notice>
   {/if}
 
-  <section class="mt-6 rounded-md border p-4" aria-labelledby="coin-calibration-heading">
-    <div class="flex items-start justify-between gap-3">
-      <div>
-        <h4 id="coin-calibration-heading" class="text-sm font-semibold">Coin Calibration</h4>
-        <p class="mt-1 text-xs text-muted-foreground">Owner-only, serial hardware only. Captured coins are diagnostic and never credit a PC or customer.</p>
+  <SettingsCard
+    title="Serial settings"
+    description="How the Admin PC talks to the coin acceptor. The Pulse Map saves with these settings."
+  >
+    <fieldset class="contents" disabled={calibrationLocksSettings}>
+      <div class="space-y-8">
+        <div class="space-y-4">
+          <h4 class="text-sm font-semibold">Connection</h4>
+          <div class="grid gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+            <div class="grid content-start gap-1.5">
+              <label class="text-sm font-medium" for="coin-com-port">COM Port</label>
+              <div class="flex gap-2 max-sm:flex-col">
+                <NativeSelect
+                  id="coin-com-port"
+                  class="flex-1"
+                  value={comPort}
+                  onchange={(event) => {
+                    const target = event.currentTarget as HTMLSelectElement;
+                    comPort = target.value;
+                    coinPortUserChanged = true;
+                  }}
+                >
+                  <option value="">Simulator (no port)</option>
+                  {#each displayedCoinPorts as port (port.name)}
+                    <option value={port.name}>
+                      {port.name} — {port.detected ? port.label : "saved, not detected"}
+                    </option>
+                  {/each}
+                </NativeSelect>
+                <Button variant="outline" disabled={coinPortsBusy} onclick={() => void loadCoinPorts()}>
+                  <RefreshCwIcon class={coinPortsBusy ? "animate-spin" : ""} aria-hidden="true" />
+                  {coinPortsBusy ? "Refreshing…" : "Refresh"}
+                </Button>
+              </div>
+              {#if selectedCoinPort && !selectedCoinPort.detected}
+                <p class="text-sm text-destructive" role="alert">
+                  Saved port {selectedCoinPort.name} was not detected. It remains selectable.
+                </p>
+              {/if}
+              {#if coinPortsError}
+                <div class="flex flex-wrap items-center gap-x-3 text-sm text-destructive" role="alert">
+                  <span>{coinPortsError}</span>
+                  <Button variant="link" class="h-auto px-0 text-destructive" disabled={coinPortsBusy} onclick={() => void loadCoinPorts()}>
+                    Retry
+                  </Button>
+                </div>
+              {/if}
+            </div>
+            <SettingsField id="coin-baud-rate" label="Baud Rate">
+              <Input id="coin-baud-rate" type="number" class="tabular-nums" bind:value={baudRate} />
+            </SettingsField>
+          </div>
+        </div>
+
+        <div class="space-y-4 border-t pt-6">
+          <h4 class="text-sm font-semibold">Signal pins</h4>
+          <div class="grid gap-4 md:grid-cols-3">
+            <SettingsField id="coin-set-pin" label="Set Pin (control)">
+              <NativeSelect id="coin-set-pin" bind:value={setPinLine}>
+                <option value="dtr">DTR</option>
+                <option value="rts">RTS</option>
+              </NativeSelect>
+            </SettingsField>
+            <SettingsField id="coin-coin-pin" label="Coin Pin (status)">
+              <NativeSelect id="coin-coin-pin" bind:value={coinPinLine}>
+                <option value="cts">CTS</option>
+                <option value="dsr">DSR</option>
+                <option value="ri">RI</option>
+                <option value="cd">DCD</option>
+              </NativeSelect>
+            </SettingsField>
+            <SettingsField
+              id="coin-pin-polarity"
+              label="Coin Pin Polarity"
+              hint="Choose Normally closed for acceptors that idle high and pulse low."
+            >
+              <NativeSelect id="coin-pin-polarity" aria-describedby="coin-pin-polarity-hint" bind:value={coinPinPolarity}>
+                <option value="normally_open">Normally open (pulse high)</option>
+                <option value="normally_closed">Normally closed (pulse low)</option>
+              </NativeSelect>
+            </SettingsField>
+          </div>
+        </div>
+
+        <div class="space-y-4 border-t pt-6">
+          <h4 class="text-sm font-semibold">Timing</h4>
+          <div class="grid gap-4 md:grid-cols-3">
+            <SettingsField id="coin-gap-ms" label="Inter-coin Gap (ms)">
+              <Input id="coin-gap-ms" type="number" class="tabular-nums" bind:value={interCoinGapMs} />
+            </SettingsField>
+            <SettingsField
+              id="coin-inactivity"
+              label="Inactivity Timeout (s)"
+              hint="The selection window closes after this idle gap. Default: 15"
+            >
+              <Input id="coin-inactivity" type="number" class="tabular-nums" aria-describedby="coin-inactivity-hint" bind:value={inactivityTimeoutSeconds} />
+            </SettingsField>
+            <SettingsField id="coin-hard-cap" label="Hard Cap (s)" hint="The longest a selection window can stay open. Default: 180">
+              <Input id="coin-hard-cap" type="number" class="tabular-nums" aria-describedby="coin-hard-cap-hint" bind:value={hardCapSeconds} />
+            </SettingsField>
+          </div>
+        </div>
+
+        <!-- The border lives on a wrapper: a fieldset's top border would be
+             interrupted by its visible legend. -->
+        <div class="border-t pt-6">
+        <fieldset class="min-w-0 space-y-4" disabled={calibrationRequired}>
+          <legend class="text-sm font-semibold">Pulse Map</legend>
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="min-w-0 flex-1 basis-60">
+              <p class="max-w-prose text-sm text-muted-foreground">
+                Coin Batches are always credited at 100 cents per pulse. This map is kept for physical calibration
+                and for historical Rejection Credit denomination choices.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onclick={addPulseMapEntry}>
+              <PlusIcon aria-hidden="true" />
+              Add row
+            </Button>
+          </div>
+          {#if duplicatePulseCounts.length > 0}
+            <p id="pulse-map-duplicate-error" class="text-sm text-destructive" role="alert">Duplicate pulse counts: {duplicatePulseCounts.join(", ")}. Each pulse count must be unique.</p>
+          {/if}
+          {#if pulseMap.length === 0}
+            <p class="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">No Pulse Map rows.</p>
+          {:else}
+            <ul class="divide-y rounded-lg border">
+              {#each pulseMap as entry, i}
+                <li class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-3 px-3 py-2 sm:grid-cols-[8rem_10rem_minmax(0,1fr)_auto] sm:items-center">
+                  <label class="grid gap-1 text-xs text-muted-foreground">
+                    Pulses
+                    <Input
+                      type="number"
+                      class="text-foreground tabular-nums"
+                      aria-label={`Pulses, row ${i + 1}`}
+                      aria-invalid={duplicatePulseCounts.includes(entry.pulse_count) || undefined}
+                      aria-describedby={duplicatePulseCounts.includes(entry.pulse_count) ? "pulse-map-duplicate-error" : undefined}
+                      bind:value={entry.pulse_count}
+                    />
+                  </label>
+                  <label class="grid gap-1 text-xs text-muted-foreground">
+                    Cents
+                    <Input type="number" class="text-foreground tabular-nums" aria-label={`Cents, row ${i + 1}`} bind:value={entry.amount_cents} />
+                  </label>
+                  <span class="col-span-2 row-start-2 text-sm tabular-nums text-muted-foreground sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:self-end sm:pb-1.5">
+                    = {formatMoney(entry.amount_cents)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    class="col-start-3 row-start-1 text-muted-foreground hover:text-destructive sm:col-start-4 sm:self-end"
+                    aria-label={`Remove Pulse Map row ${i + 1}`}
+                    title="Remove row"
+                    onclick={() => removePulseMapEntry(i)}
+                  >
+                    <Trash2Icon aria-hidden="true" />
+                  </Button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if calibrationRequired}
+            <p class="text-xs text-muted-foreground">The candidate map is locked until a physical calibration is applied.</p>
+          {/if}
+        </fieldset>
+        </div>
       </div>
+    </fieldset>
+
+    {#if testResult}
+      <Notice class="mt-6" role="status" title="Acceptor test result">
+        <p>{testResult}</p>
+      </Notice>
+    {/if}
+
+    {#snippet footer()}
+      <p class="mr-auto text-xs text-muted-foreground max-md:basis-full">
+        {calibrationLocksSettings
+          ? "Locked while a calibration is in progress."
+          : "Saving starts a new Coin Debug Window."}
+      </p>
+      <Button variant="outline" disabled={calibrationCapturing} onclick={testAcceptor}>Test Acceptor</Button>
+      <Button disabled={coinBusy || calibrationLocksSettings || duplicatePulseCounts.length > 0} onclick={saveCoinDevice}>
+        {coinBusy ? "Saving…" : "Save Coin Device"}
+      </Button>
+    {/snippet}
+  </SettingsCard>
+
+  <SettingsCard
+    title="Coin Calibration"
+    description="Owner-only, serial hardware only. Captured coins are diagnostic and never credit a PC or customer."
+  >
+    {#snippet actions()}
       {#if calibration}
         <Badge variant="secondary" class="capitalize">{calibration.phase}</Badge>
       {/if}
-    </div>
+    {/snippet}
 
     {#if !calibration || calibration.phase !== "capturing" && calibration.phase !== "completed"}
-      {#if calibration?.phase === "failed" && calibration.failure_reason}
-        <p class="mt-3 text-sm text-destructive" role="alert">{calibration.failure_reason}</p>
-      {/if}
-      <p class="mt-3 text-sm text-muted-foreground">Save the serial settings first, then record five individual genuine coins. The source stays exclusive and inhibited between samples.</p>
-      <label class="mt-3 block text-sm" for="calibration-target-cents">Target amount (integer cents; ₱20 default)</label>
-      <input id="calibration-target-cents" class="mt-1 w-32 rounded border bg-background px-2 py-1 text-sm" type="number" min="1" bind:value={calibrationTargetCents} />
-      <button
-        class="mt-3 rounded-md border bg-card px-3 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-        type="button"
-        disabled={calibrationBusy || coinBusy || !comPort}
-        onclick={() => void startCalibration()}
-      >
-        {calibrationBusy ? "Starting…" : calibrationTargetCents === 2000 ? "Start ₱20 Calibration" : "Start Calibration"}
-      </button>
-    {:else if calibration.phase === "capturing"}
-      <p class="mt-3 text-sm">Sample {calibration.sample_counts.length + 1} of {calibration.required_samples}. Pulses captured: <strong>{calibration.current_pulse_count}</strong></p>
-      {#if calibration.sample_armed}
-        <p class="mt-1 text-xs text-muted-foreground">Insert exactly one genuine {formatMoney(calibration.target_amount_cents)} coin, wait for the train to finish, then record the sample.</p>
-      {:else}
-        <p class="mt-1 text-xs text-muted-foreground">Set Pin is inhibited between samples. Arm the next sample before inserting the next coin.</p>
-      {/if}
-      <div class="mt-3 flex flex-wrap gap-2">
-        {#if calibration.sample_armed}
-          <button class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" type="button" disabled={calibrationBusy} onclick={() => void recordCalibrationSample()}>
-            {calibrationBusy ? "Recording…" : "Record Sample"}
-          </button>
-        {:else}
-          <button class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" type="button" disabled={calibrationBusy} onclick={() => void armCalibrationSample()}>
-            {calibrationBusy ? "Arming…" : "Arm Next Sample"}
-          </button>
+      <div class="space-y-4">
+        {#if calibration?.phase === "failed" && calibration.failure_reason}
+          <Notice tone="danger" role="alert">{calibration.failure_reason}</Notice>
         {/if}
-        <button class="rounded-md border bg-card px-3 py-2 text-sm hover:bg-accent disabled:opacity-50" type="button" disabled={calibrationBusy} onclick={() => void cancelCalibration()}>Cancel</button>
+        <p class="max-w-prose text-sm text-muted-foreground">
+          Save the serial settings first, then record five individual genuine coins. The source stays exclusive and
+          inhibited between samples.
+        </p>
+        <div class="flex flex-wrap items-end gap-3">
+          <SettingsField id="calibration-target-cents" label="Target amount (cents)" class="w-44">
+            <Input
+              id="calibration-target-cents"
+              type="number"
+              min="1"
+              class="tabular-nums"
+              aria-describedby="calibration-target-cents-hint"
+              bind:value={calibrationTargetCents}
+            />
+          </SettingsField>
+          <Button
+            variant="outline"
+            disabled={calibrationBusy || coinBusy || !comPort}
+            onclick={() => void startCalibration()}
+          >
+            {calibrationBusy ? "Starting…" : calibrationTargetCents === 2000 ? "Start ₱20 Calibration" : "Start Calibration"}
+          </Button>
+        </div>
+        <p id="calibration-target-cents-hint" class="text-xs text-muted-foreground">
+          Whole cents. Default: 2000 (₱20).{!comPort ? " Choose a COM Port first; calibration needs serial hardware." : ""}
+        </p>
+      </div>
+    {:else if calibration.phase === "capturing"}
+      {@const recorded = calibration.sample_counts.length}
+      <div class="space-y-3">
+        <div class="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+          <p class="font-medium">Sample {recorded + 1} of {calibration.required_samples}</p>
+          <p>Pulses captured: <strong class="tabular-nums">{calibration.current_pulse_count}</strong></p>
+        </div>
+        <div
+          class="h-1.5 overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+          aria-label="Samples recorded"
+          aria-valuemin={0}
+          aria-valuemax={calibration.required_samples}
+          aria-valuenow={recorded}
+        >
+          <div class="h-full bg-primary transition-all" style="width: {(recorded / Math.max(calibration.required_samples, 1)) * 100}%"></div>
+        </div>
+        {#if calibration.sample_armed}
+          <p class="text-sm text-muted-foreground">Insert exactly one genuine {formatMoney(calibration.target_amount_cents)} coin, wait for the train to finish, then record the sample.</p>
+        {:else}
+          <p class="text-sm text-muted-foreground">Set Pin is inhibited between samples. Arm the next sample before inserting the next coin.</p>
+        {/if}
+        <div class="flex flex-wrap gap-2 max-md:*:flex-1">
+          {#if calibration.sample_armed}
+            <Button disabled={calibrationBusy} onclick={() => void recordCalibrationSample()}>
+              {calibrationBusy ? "Recording…" : "Record Sample"}
+            </Button>
+          {:else}
+            <Button disabled={calibrationBusy} onclick={() => void armCalibrationSample()}>
+              {calibrationBusy ? "Arming…" : "Arm Next Sample"}
+            </Button>
+          {/if}
+          <Button variant="outline" disabled={calibrationBusy} onclick={() => void cancelCalibration()}>Cancel</Button>
+        </div>
       </div>
     {:else}
-      <p class="mt-3 text-sm">Samples: <strong>{calibration.sample_counts.join(", ")}</strong> pulses</p>
-      <p class="mt-1 text-xs text-muted-foreground">Apply is available only when all five samples agree. Target amount: {formatMoney(calibration.target_amount_cents)} ({calibration.target_amount_cents} cents).</p>
-      <div class="mt-3 flex flex-wrap gap-2">
-        <button class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" type="button" disabled={calibrationBusy || calibration.phase !== "completed"} onclick={() => void applyCalibration()}>Apply Mapping</button>
-        <button class="rounded-md border bg-card px-3 py-2 text-sm hover:bg-accent disabled:opacity-50" type="button" disabled={calibrationBusy} onclick={() => void cancelCalibration()}>Discard</button>
+      <div class="space-y-3">
+        <p class="text-sm">Samples: <strong class="tabular-nums">{calibration.sample_counts.join(", ")}</strong> pulses</p>
+        <p class="text-sm text-muted-foreground">Apply is available only when all five samples agree. Target amount: {formatMoney(calibration.target_amount_cents)} ({calibration.target_amount_cents} cents).</p>
+        <div class="flex flex-wrap gap-2 max-md:*:flex-1">
+          <Button disabled={calibrationBusy || calibration.phase !== "completed"} onclick={() => void applyCalibration()}>Apply Mapping</Button>
+          <Button variant="outline" disabled={calibrationBusy} onclick={() => void cancelCalibration()}>Discard</Button>
+        </div>
       </div>
     {/if}
     {#if calibrationError}
-      <p class="mt-3 text-sm text-destructive" role="alert">{calibrationError}</p>
+      <p class="mt-4 text-sm text-destructive" role="alert">{calibrationError}</p>
     {/if}
-  </section>
+  </SettingsCard>
 
-  <section class="mt-6 rounded-md border p-4" aria-labelledby="acceptor-health-heading">
-    <div class="flex items-center justify-between gap-3">
-      <div>
-        <h4 id="acceptor-health-heading" class="text-sm font-semibold">Acceptor Health</h4>
-        <p class="mt-1 text-xs text-muted-foreground">Current diagnostic coverage and timing instrumentation status.</p>
-      </div>
-      <button
-        class="rounded-md border bg-card px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
-        type="button"
+  <SettingsCard title="Acceptor Health" description="Current diagnostic coverage and timing instrumentation status.">
+    {#snippet actions()}
+      <Button
+        variant="outline"
+        size="sm"
         aria-label="Refresh Acceptor Health"
         disabled={acceptorHealthBusy}
         onclick={() => void loadAcceptorHealth()}
       >
+        <RefreshCwIcon class={acceptorHealthBusy ? "animate-spin" : ""} aria-hidden="true" />
         {acceptorHealthBusy ? "Refreshing…" : "Refresh"}
-      </button>
-    </div>
+      </Button>
+    {/snippet}
+
     {#if acceptorHealthLoadError}
-      <p class="mt-3 text-sm text-destructive" role="alert">Unable to load Acceptor Health: {acceptorHealthLoadError}</p>
+      <Notice tone="danger" role="alert">
+        <p>Unable to load Acceptor Health: {acceptorHealthLoadError}</p>
+      </Notice>
     {:else if acceptorHealth === null}
-      <p class="mt-3 text-sm text-muted-foreground">Loading Acceptor Health…</p>
+      <p class="text-sm text-muted-foreground">Loading Acceptor Health…</p>
     {:else}
-      <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+      <dl class="grid gap-4 text-sm sm:grid-cols-3">
         <div>
-          <dt class="text-xs text-muted-foreground">Coin Debug Window start</dt>
-          <dd class="mt-1 font-medium">{formatTransactionTime(acceptorHealth.debug_window_start)}</dd>
+          <dt class="text-muted-foreground">Coin Debug Window start</dt>
+          <dd class="mt-1 font-medium tabular-nums">{formatTransactionTime(acceptorHealth.debug_window_start)}</dd>
         </div>
         <div>
-          <dt class="text-xs text-muted-foreground">Inter-pulse timing</dt>
+          <dt class="text-muted-foreground">Inter-pulse timing</dt>
           <dd class="mt-1 font-medium">Unavailable until filtered timing (S2)</dd>
-          <dd class="mt-1 font-mono text-xs text-muted-foreground">{acceptorHealth.timing_status}</dd>
+          <dd class="mt-0.5 font-mono text-xs text-muted-foreground">{acceptorHealth.timing_status}</dd>
         </div>
         <div>
-          <dt class="text-xs text-muted-foreground">Implausible Timing rate</dt>
-          <dd class="mt-1 font-medium">{acceptorHealth.implausible_timing_rate === null ? "Not reported in S1" : `${acceptorHealth.implausible_timing_rate}%`}</dd>
+          <dt class="text-muted-foreground">Implausible Timing rate</dt>
+          <dd class="mt-1 font-medium tabular-nums">{acceptorHealth.implausible_timing_rate === null ? "Not reported in S1" : `${acceptorHealth.implausible_timing_rate}%`}</dd>
         </div>
       </dl>
     {/if}
-  </section>
-
-  <div class="mt-6 flex gap-3">
-    <button
-      class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-      type="button"
-      disabled={coinBusy || calibrationLocksSettings || duplicatePulseCounts.length > 0}
-      onclick={saveCoinDevice}
-    >
-      {coinBusy ? "Saving…" : "Save"}
-    </button>
-    <button
-      class="rounded-md border bg-card px-4 py-2 text-sm font-medium hover:bg-accent"
-      type="button"
-      disabled={calibrationCapturing}
-      onclick={testAcceptor}
-    >
-      Test Acceptor
-    </button>
-  </div>
-
-  {#if testResult}
-    <div class="mt-4 rounded-md bg-muted p-3 text-sm">{testResult}</div>
-  {/if}
+  </SettingsCard>
 </div>

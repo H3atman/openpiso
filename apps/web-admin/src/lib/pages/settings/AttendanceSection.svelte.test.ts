@@ -94,7 +94,8 @@ describe("Attendance settings", () => {
     expect(view.getByText("Outstanding Attendance Time")).toBeTruthy();
     expect(view.getByText("25 hours")).toBeTruthy();
     expect(view.getByText("120.00%", { selector: "p" })).toBeTruthy();
-    expect(view.getByLabelText("Active Attendance Effective Bonus").tagName).toBe("DEL");
+    expect(view.getByLabelText("Active Attendance Effective Bonus").textContent).toBe("120.00%");
+    expect(view.getByLabelText("Active Attendance Effective Bonus").tagName).not.toBe("DEL");
     expect(view.getByText(/₱10 buys 50 min; Attendance Reward gives 1 hour/)).toBeTruthy();
     expect(view.getByText("Default: ₱10")).toBeTruthy();
     expect(view.getByText(/Existing daily snapshots are unchanged/)).toBeTruthy();
@@ -131,6 +132,7 @@ describe("Attendance settings", () => {
       }),
     );
     expect(view.getByText("30.00%", { exact: true })).toBeTruthy();
+    expect(view.getByLabelText("Active Attendance Effective Bonus").tagName).toBe("DEL");
     expect((commit as HTMLButtonElement).disabled).toBe(false);
 
     await fireEvent.click(commit);

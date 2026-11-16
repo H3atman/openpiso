@@ -3,6 +3,13 @@
   import * as api from "../../api";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import { Switch } from "../../components/ui/switch";
+  import { Button } from "../../components/ui/button";
+  import { Input } from "../../components/ui/input";
+  import Notice from "../../components/settings/Notice.svelte";
+  import SettingsCard from "../../components/settings/SettingsCard.svelte";
+  import ToggleRow from "../../components/settings/ToggleRow.svelte";
+  import PlusIcon from "@lucide/svelte/icons/plus";
+  import Trash2Icon from "@lucide/svelte/icons/trash-2";
   import type { CoinPromoSettings, CoinPromoSettingsInput, CoinPromoTierInput } from "../../types";
 
   function formatBasisPoints(basisPoints: number): string {
@@ -109,103 +116,112 @@
   });
 </script>
 
-<div class="rounded-lg border bg-card p-6">
-  <div class="mb-5 flex flex-wrap items-start justify-between gap-4">
-    <div>
-      <h3 class="text-lg font-semibold">Coin Promo</h3>
-      <p class="text-sm text-muted-foreground">
-        Give logged-in accounts bonus time for the coins they insert. Guests receive no bonus.
-      </p>
-    </div>
-    <label class="flex items-center gap-2 text-sm font-medium">
-      <Switch size="sm" bind:checked={coinPromoEnabled} />
-      Enable Coin Promo
-    </label>
-  </div>
-
-  <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-    <p class="text-xs text-muted-foreground">
-      Coin amounts are pesos (stored as integer cents); bonuses are whole minutes. Percentages and the combined worst case are computed by Rust.
-      Coins inserted together are credited as one batch and split across tiers largest-first, so ₱10 + ₱1 earns the ₱10 tier; an amount no tier covers earns nothing.
-    </p>
-    <button
-      class="rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
-      type="button"
-      disabled={coinPromoBusy}
-      onclick={addCoinPromoTier}
-    >
+<SettingsCard
+  title="Bonus tiers"
+  description="Give logged-in accounts bonus time for the coins they insert. Guests receive no bonus."
+  flush
+>
+  {#snippet actions()}
+    <Button variant="outline" size="sm" disabled={coinPromoBusy} onclick={addCoinPromoTier}>
+      <PlusIcon aria-hidden="true" />
       Add tier
-    </button>
+    </Button>
+  {/snippet}
+
+  <div class="space-y-4 border-b px-4 py-4 md:px-6">
+    <ToggleRow
+      id="coin-promo-enabled"
+      label="Enable Coin Promo"
+      description="When off, no Coin Promo bonus is given; your tiers stay saved."
+      status={coinPromoEnabled ? "On" : "Off"}
+    >
+      <Switch id="coin-promo-enabled" aria-describedby="coin-promo-enabled-description" bind:checked={coinPromoEnabled} />
+    </ToggleRow>
+
+    <Notice>
+      <p>
+        Coins inserted together are credited as one batch and split across tiers largest-first, so ₱10 + ₱1 earns
+        the ₱10 tier; an amount no tier covers earns nothing.
+      </p>
+      <p class="text-muted-foreground">Coin amounts are in pesos; bonuses are whole minutes.</p>
+    </Notice>
+
+    {#if coinPromoLoadError}
+      <Notice tone="danger">{coinPromoLoadError}</Notice>
+    {/if}
   </div>
 
-  <div class="overflow-x-auto">
-    <table class="w-full text-left text-sm">
-      <thead class="border-b text-xs text-muted-foreground">
-        <tr>
-          <th class="px-2 py-2 font-medium">Coin amount</th>
-          <th class="px-2 py-2 font-medium">Bonus minutes</th>
-          <th class="px-2 py-2 font-medium">Effective Bonus</th>
-          <th class="px-2 py-2"><span class="sr-only">Actions</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        <!-- Authoring order, not sorted order — see the Redemption Tiers table. -->
-        {#each coinPromoTiers as tier (tier)}
-          {@const basisPoints = coinPromoTierBasisPoints(tier)}
-          <tr class="border-b last:border-0">
-            <td class="px-2 py-2">
-              <span class="mr-1 text-xs text-muted-foreground">₱</span>
-              <input
+  {#if coinPromoTiers.length === 0}
+    <p class="px-4 py-10 text-center text-sm text-muted-foreground">
+      No Coin Promo Tiers yet. Add one to give a bonus for a coin amount.
+    </p>
+  {:else}
+    <div
+      class="hidden grid-cols-[10rem_8rem_minmax(0,1fr)_2.75rem] items-center gap-4 border-b bg-muted/40 px-6 py-2 text-xs font-medium text-muted-foreground md:grid"
+    >
+      <span>Coin amount</span>
+      <span>Bonus minutes</span>
+      <span>Effective Bonus</span>
+      <span class="sr-only">Actions</span>
+    </div>
+    <ul class="divide-y">
+      <!-- Authoring order, not sorted order — see the Redemption Tiers list. -->
+      {#each coinPromoTiers as tier (tier)}
+        {@const basisPoints = coinPromoTierBasisPoints(tier)}
+        <li
+          class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-x-3 gap-y-2 px-4 py-3 md:grid-cols-[10rem_8rem_minmax(0,1fr)_2.75rem] md:items-center md:gap-4 md:px-6"
+        >
+          <div class="grid gap-1">
+            <span class="text-xs text-muted-foreground md:hidden" aria-hidden="true">Coin amount</span>
+            <div class="relative">
+              <span class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm text-muted-foreground" aria-hidden="true">₱</span>
+              <Input
                 aria-label="Coin amount in pesos"
                 type="number"
                 min="0.01"
                 step="0.01"
-                class="w-36 rounded-md border bg-background px-3 py-2"
+                class="pl-6 tabular-nums"
                 bind:value={tier.amount_pesos}
               />
-            </td>
-            <td class="px-2 py-2">
-              <input
-                aria-label="Coin Promo bonus minutes"
-                type="number"
-                min="1"
-                step="1"
-                class="w-32 rounded-md border bg-background px-3 py-2"
-                bind:value={tier.bonus_minutes}
-              />
-            </td>
-            <td class="px-2 py-2 font-mono text-muted-foreground">
-              {basisPoints === null ? "—" : formatBasisPoints(basisPoints)}
-            </td>
-            <td class="px-2 py-2 text-right">
-              <button
-                class="rounded-md px-3 py-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                type="button"
-                disabled={coinPromoBusy}
-                onclick={() => removeCoinPromoTier(tier)}
-              >
-                Remove
-              </button>
-            </td>
-          </tr>
-        {/each}
-        {#if coinPromoTiers.length === 0}
-          <tr><td colspan="4" class="px-2 py-6 text-center text-muted-foreground">No Coin Promo Tiers authored.</td></tr>
-        {/if}
-      </tbody>
-    </table>
-  </div>
-
-  {#if coinPromoLoadError}
-    <div class="mt-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{coinPromoLoadError}</div>
+            </div>
+          </div>
+          <div class="grid gap-1">
+            <span class="text-xs text-muted-foreground md:hidden" aria-hidden="true">Bonus minutes</span>
+            <Input
+              aria-label="Coin Promo bonus minutes"
+              type="number"
+              min="1"
+              step="1"
+              class="tabular-nums"
+              bind:value={tier.bonus_minutes}
+            />
+          </div>
+          <p class="col-span-2 row-start-2 font-mono text-sm tabular-nums md:col-span-1 md:col-start-3 md:row-start-1">
+            <span class="mr-2 font-sans text-muted-foreground md:hidden">Effective Bonus</span>
+            {basisPoints === null ? "—" : formatBasisPoints(basisPoints)}
+          </p>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="col-start-3 row-start-1 self-end text-muted-foreground hover:text-destructive md:col-start-4 md:self-center"
+            aria-label="Remove ₱{tier.amount_pesos} tier"
+            title="Remove tier"
+            disabled={coinPromoBusy}
+            onclick={() => removeCoinPromoTier(tier)}
+          >
+            <Trash2Icon aria-hidden="true" />
+          </Button>
+        </li>
+      {/each}
+    </ul>
   {/if}
 
-  <button
-    class="mt-5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-    type="button"
-    disabled={coinPromoBusy}
-    onclick={saveCoinPromo}
-  >
-    {coinPromoBusy ? "Saving…" : "Save Coin Promo"}
-  </button>
-</div>
+  {#snippet footer()}
+    <p class="mr-auto text-xs text-muted-foreground max-md:basis-full">
+      Effective Bonus is recalculated as you edit; nothing changes until you save.
+    </p>
+    <Button disabled={coinPromoBusy} onclick={saveCoinPromo}>
+      {coinPromoBusy ? "Saving…" : "Save Coin Promo"}
+    </Button>
+  {/snippet}
+</SettingsCard>

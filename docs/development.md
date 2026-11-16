@@ -557,6 +557,29 @@ not found, so it never blocks `bun test`.
 bun run test:change-password-dialog --filter=@openpiso/client
 ```
 
+### Web Admin screenshot harnesses
+
+Render the real Web Admin shell from fixtures (no Admin server; each harness
+entry stubs `window.fetch`) in headless Chrome and write one PNG per state to
+`--out`. Both scripts share `scripts/screenshot-runner.ts` (Vite plus CDP, fixed
+`Asia/Manila` timezone, reduced motion) and exit non-zero if any state fails.
+Chrome lookup honours `CHROME_PATH`. No package script is defined.
+
+```bash
+cd apps/web-admin
+bun run scripts/dashboard-screenshots.ts --out <dir>
+bun run scripts/settings-screenshots.ts --out <dir>
+```
+
+- **Dashboard** (`dashboard-harness.html`): busy, quiet and empty scenarios;
+  desktop 1280, wide 1920 and phone 390; light and dark; confirm dialogs,
+  Check All results and keyboard focus. Query: `scenario=busy|quiet|empty`,
+  `theme=light|dark`.
+- **Settings** (`settings-harness.html`): every Settings section plus the
+  phone index; desktop 1280, wide 1920 and phone 390; light and dark; the
+  empty scenario; dialog, focus and validation states. Query:
+  `section=<section id>|index`, `theme=light|dark`, `scenario=default|empty`.
+
 ## Optional agent skills
 
 Agent skills are not build dependencies. Install outside the tracked source with

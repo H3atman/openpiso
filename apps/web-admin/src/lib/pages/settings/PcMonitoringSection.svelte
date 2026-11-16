@@ -2,7 +2,10 @@
   import { onMount } from "svelte";
   import * as api from "../../api";
   import ConfirmDialog from "../../components/ConfirmDialog.svelte";
-  import { Badge } from "$lib/components/ui/badge";
+  import { Input } from "$lib/components/ui/input";
+  import Notice from "$lib/components/settings/Notice.svelte";
+  import SettingsCard from "$lib/components/settings/SettingsCard.svelte";
+  import ToggleRow from "$lib/components/settings/ToggleRow.svelte";
   import { Switch } from "../../components/ui/switch";
   import { reportActionFailure, reportActionSuccess } from "../../notifications";
   import type { PcMonitoringStatus } from "../../types";
@@ -67,72 +70,84 @@
   }
 </script>
 
-<div class="rounded-lg border bg-card p-6">
-  <h3 class="mb-4 text-lg font-semibold">PC Monitoring</h3>
-
+<SettingsCard
+  title="Incident detection"
+  description="One Alert per episode, with full evidence in the Audit Log. Monitoring is shop-wide and never locks, powers off, or bills anyone."
+>
   {#if loadError}
-    <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-      {loadError}
-    </div>
+    <Notice tone="danger">{loadError}</Notice>
   {/if}
 
   {#if status}
-    <div class="space-y-4">
-      <p class="text-sm text-muted-foreground">
-        Watches every visible registered PC for a
-        <strong>Client Reachability Mismatch</strong>: a host that keeps
-        answering on the LAN while its Client stops reporting. It also watches
-        <strong>Host Probe Coverage</strong>: a PC whose Client proves it is
-        running while its reachability can no longer be tested. Missing
-        coverage means that PC is unmonitored — not offline or tampered.
-        Release Windows Clients also report whether they hold their
-        <strong>Client Guard</strong> connection; two continuous minutes
-        without it opens a <strong>Client Guard Coverage</strong> incident.
-        This diagnostic is advisory only — check the Guard service and Client
-        installation on the PC, since Admin detects and never repairs
-        services. One Alert per episode, with full evidence in the Audit Log.
-        Monitoring is shop-wide and never locks, powers off, or bills anyone.
-      </p>
-
-      <div class="flex items-center gap-3">
-        <span class="text-sm font-medium">Monitoring:</span>
-        <Badge variant={status.enabled ? "default" : "secondary"}>
-          {status.enabled ? "On" : "Off"}
-        </Badge>
+    <div class="space-y-6">
+      <div>
+        <h4 class="text-sm font-semibold">What it watches on every visible registered PC</h4>
+        <ul class="mt-3 grid gap-3 text-sm text-muted-foreground lg:grid-cols-3">
+          <li class="rounded-lg border px-4 py-3">
+            <p>
+              <strong class="block text-foreground">Client Reachability Mismatch</strong>
+              A host that keeps answering on the LAN while its Client stops reporting.
+            </p>
+          </li>
+          <li class="rounded-lg border px-4 py-3">
+            <p>
+              <strong class="block text-foreground">Host Probe Coverage</strong>
+              A PC whose Client proves it is running while its reachability can no longer be tested. Missing
+              coverage means that PC is unmonitored — not offline or tampered.
+            </p>
+          </li>
+          <li class="rounded-lg border px-4 py-3">
+            <p>
+              <strong class="block text-foreground">Client Guard Coverage</strong>
+              Release Windows Clients report whether they hold their Client Guard connection; two continuous
+              minutes without it opens an incident. Advisory only — check the Guard service and Client
+              installation on the PC, since Admin detects and never repairs services.
+            </p>
+          </li>
+        </ul>
       </div>
 
       {#if !status.platform_supported}
-        <div class="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-          PC Monitoring requires a Windows Admin. This installation can send no
-          probes and will never manufacture results.
-        </div>
+        <Notice>
+          <p>
+            PC Monitoring requires a Windows Admin. This installation can send no probes and will never
+            manufacture results.
+          </p>
+        </Notice>
       {:else}
         <!-- The Switch reflects the saved state; toggling it only opens the
              PIN confirmation. -->
-        <div class="flex items-center gap-3">
+        <ToggleRow
+          id="pc-monitoring-enabled"
+          label="Monitor PCs"
+          description="Changing this requires your current Web Admin PIN and is audited."
+          status={status.enabled ? "On" : "Off"}
+          class="border-t pt-6"
+        >
           <Switch
+            id="pc-monitoring-enabled"
+            aria-describedby="pc-monitoring-enabled-description"
             checked={status.enabled}
             onCheckedChange={(value) => askToggle(value === true)}
             disabled={busy}
           />
-          <span class="text-xs text-muted-foreground">
-            Changing this requires your current Web Admin PIN and is audited.
-          </span>
-        </div>
+        </ToggleRow>
 
         {#if !status.enabled}
-          <div class="rounded-md bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            While monitoring is off, the dashboard shows a standing advisory and
-            no incidents are detected. Disabling later closes active incidents
-            as <strong>monitoring disabled</strong> — historical Alerts remain.
-          </div>
+          <Notice tone="warning">
+            <p>
+              While monitoring is off, the dashboard shows a standing advisory and no incidents are detected.
+              Disabling later closes active incidents as <strong>monitoring disabled</strong> — historical
+              Alerts remain.
+            </p>
+          </Notice>
         {/if}
       {/if}
     </div>
   {:else if !loadError}
-    <div class="text-sm text-muted-foreground">Loading PC Monitoring state…</div>
+    <p class="text-sm text-muted-foreground">Loading PC Monitoring state…</p>
   {/if}
-</div>
+</SettingsCard>
 
 {#if status && pendingEnabled !== null}
   <ConfirmDialog
@@ -151,20 +166,19 @@
       Active incidents will close as <strong>monitoring disabled</strong>, never
       as recovered. Historical Alerts remain in Notifications.
     {/if}
-    <div class="mt-3">
-      <label class="block text-sm font-medium" for="pc-monitoring-pin">
-        Current Web Admin PIN
-      </label>
-      <input
+    <div class="mt-4 grid gap-1.5">
+      <label class="text-sm font-medium text-foreground" for="pc-monitoring-pin">Current Web Admin PIN</label>
+      <Input
         id="pc-monitoring-pin"
         type="password"
         autocomplete="current-password"
-        class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
         placeholder="Enter current PIN"
+        aria-invalid={pinError ? true : undefined}
+        aria-describedby={pinError ? "pc-monitoring-pin-error" : undefined}
         bind:value={pin}
       />
       {#if pinError}
-        <p class="mt-1 text-xs text-destructive">{pinError}</p>
+        <p id="pc-monitoring-pin-error" class="text-xs text-destructive">{pinError}</p>
       {/if}
     </div>
   </ConfirmDialog>
