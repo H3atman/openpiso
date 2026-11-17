@@ -432,7 +432,12 @@ them; updates over an install that already has both rules do not prompt.
 Uninstalling removes them (an update does not). The installer never opens
 TCP 8080.
 
-If the UAC prompt was declined, or Clients show "Looking for the OpenPiso
+That prompt names **Windows Command Processor** (verified publisher: Microsoft
+Windows), not OpenPiso, because the installer uses the Windows command prompt
+to add the rules. This is expected: choose **Yes**. The install finishes either
+way.
+
+If the UAC prompt was declined or left unanswered, or Clients show "Looking for the OpenPiso
 server…" forever while manual entry works, add the rules from an elevated
 prompt:
 
