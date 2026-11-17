@@ -423,15 +423,22 @@ it lives on the same VLAN as the PCs themselves.
 
 ### Windows Firewall for `:3210` (TCP and UDP)
 
-The admin installer adds no firewall rules. Windows usually prompts the
-first time the admin listens; allow it on the **Private** network profile.
-Server Discovery also needs **inbound UDP 3210** on the server PC. If the
-prompt was dismissed, or Clients show "Looking for the OpenPiso server…"
-forever while manual entry works, add both rules from an elevated prompt:
+The admin installer adds two inbound rules on the server PC: **OpenPiso
+device API** (TCP 3210) and **OpenPiso discovery** (UDP 3210, for Server
+Discovery). Both apply on every network profile, because shop LANs are often
+left on Public, and are scoped to the local subnet instead. The installer runs
+without administrator rights, so the first install shows one UAC prompt to add
+them; updates over an install that already has both rules do not prompt.
+Uninstalling removes them (an update does not). The installer never opens
+TCP 8080.
+
+If the UAC prompt was declined, or Clients show "Looking for the OpenPiso
+server…" forever while manual entry works, add the rules from an elevated
+prompt:
 
 ```text
-netsh advfirewall firewall add rule name="OpenPiso device API" dir=in action=allow protocol=TCP localport=3210 profile=private
-netsh advfirewall firewall add rule name="OpenPiso discovery" dir=in action=allow protocol=UDP localport=3210 profile=private
+netsh advfirewall firewall add rule name="OpenPiso device API" dir=in action=allow protocol=TCP localport=3210 remoteip=localsubnet
+netsh advfirewall firewall add rule name="OpenPiso discovery" dir=in action=allow protocol=UDP localport=3210 remoteip=localsubnet
 ```
 
 Clients need no rule: discovery replies come back to the port the Client
