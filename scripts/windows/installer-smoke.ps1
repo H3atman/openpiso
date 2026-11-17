@@ -126,9 +126,10 @@ try {
         Add-Check "owner_setup" $false "POST /web-admin/setup: $($_.Exception.Message)"
     }
 
-    # 7. The unknown Client's heartbeat (default http://127.0.0.1:3210, every
-    # 5 s) lists it as a Pending PC. Never approve it: a registered PC with no
-    # time is told to power off.
+    # 7. The unknown Client's heartbeat (every 5 s) lists it as a Pending PC.
+    # It reaches the Admin over loopback by default, or over this machine's
+    # LAN address when Server Discovery answers first. Never approve it: a
+    # registered PC with no time is told to power off.
     $pending = Wait-Until {
         $list = Invoke-RestMethod -Uri "$webAdmin/pcs/pending" -WebSession $web -UseBasicParsing -TimeoutSec 5
         @($list | Where-Object { $_ }) | Select-Object -First 1
@@ -137,7 +138,8 @@ try {
     $expectedCode = ($pending.mac -replace ":", "").ToUpper()
     $expectedCode = $expectedCode.Substring([Math]::Max(0, $expectedCode.Length - 4))
     Add-Check "approval_code" ($pending.approval_code -ceq $expectedCode) "mac $($pending.mac) -> $($pending.approval_code), expected $expectedCode"
-    Add-Check "pending_source_ip" ($pending.source_ip -eq "127.0.0.1") "source_ip $($pending.source_ip)"
+    $localIps = @("127.0.0.1") + @(Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object { $_.IPAddress })
+    Add-Check "pending_source_ip" ($localIps -contains $pending.source_ip) "source_ip $($pending.source_ip) is this machine"
 } catch {
     # A failed check already recorded itself; anything else is a script error.
     if (-not $failed) {

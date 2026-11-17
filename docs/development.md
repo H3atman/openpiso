@@ -150,8 +150,8 @@ PR Check's `windows-installers` job runs `bun run build:installers` on
 and asserts the installed exe, both `:3210` firewall rules (TCP and UDP), and an
 unconfigured Web Admin; installs the Client and asserts its exe and a running
 Guard service; sets up an Owner Session; and waits for the Client to appear as a
-Pending PC whose Approval Code matches its MAC and whose source IP is
-`127.0.0.1`. It never approves the PC. If the Guard cannot launch the Client (no
+Pending PC whose Approval Code matches its MAC and whose source IP is this
+machine (loopback, or its LAN address when Server Discovery answers first). It never approves the PC. If the Guard cannot launch the Client (no
 console session), the script starts it and records `client_launched_by: script`.
 The installers and `smoke-out/installer-smoke.json` are uploaded as the
 `windows-installers` artifact (7 days). To run it by hand, use a disposable
