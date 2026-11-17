@@ -31,7 +31,7 @@
   function niceMax(maxCents: number): number {
     if (maxCents <= 100) return 100;
     const magnitude = 10 ** Math.floor(Math.log10(maxCents));
-    for (const step of [1, 2, 5, 10]) {
+    for (const step of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
       const candidate = step * magnitude;
       if (candidate >= maxCents) return candidate;
     }
@@ -87,24 +87,29 @@
 {/snippet}
 
 {#if !hasSales}
-  <p class="text-muted-foreground text-sm">No sales recorded for this month.</p>
+  <!-- Same footprint as the plot, so switching months does not jump the page. -->
+  <div
+    class="text-muted-foreground flex h-[12.5rem] items-center justify-center rounded-md border border-dashed text-sm md:h-[15rem]"
+  >
+    <p>No sales recorded for this month.</p>
+  </div>
 {:else}
   <figure class="m-0">
     {#if peak}
       <div
         data-testid="sales-peak"
-        class="mb-2 flex min-h-5 flex-wrap items-baseline gap-x-2 text-xs"
+        class="mb-3 flex min-h-5 flex-wrap items-baseline gap-x-2 text-sm"
       >
         <span class="text-muted-foreground"
           >Best day · {formatReportDate(peak.date)}</span
         >
-        <span class="font-mono font-medium">{formatMoney(peak.cents)}</span>
+        <span class="font-semibold tabular-nums">{formatMoney(peak.cents)}</span>
       </div>
     {/if}
 
     <Chart.Container
       config={chartConfig}
-      class="aspect-auto h-[100px] w-full md:h-[120px]"
+      class="aspect-auto h-[10.75rem] w-full md:h-[13.75rem]"
       role="img"
       aria-label="Daily sales for {caption}"
     >
@@ -126,12 +131,12 @@
         props={{
           area: {
             curve: curveLinear,
-            fillOpacity: 0.4,
-            line: { class: "stroke-1" },
+            fillOpacity: 0.25,
+            line: { class: "stroke-2" },
             motion: "tween",
           },
           xAxis: { format: dayLabel, ticks: xTicks },
-          yAxis: { format: formatMoneyCompact, ticks: 3 },
+          yAxis: { format: formatMoneyCompact, ticks: 4 },
         }}
       >
         {#snippet tooltip()}
