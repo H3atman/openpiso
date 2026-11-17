@@ -1,4 +1,4 @@
-# Lightweight Linux validation; installers and signing secrets stay in the tag-triggered release workflow.
+# Linux validation plus an unsigned Windows installer build and smoke test; signing secrets stay in the tag-triggered release workflow.
 name: PR Check
 
 on:
@@ -43,3 +43,41 @@ jobs:
       # Windows-only Guard adapters still need separate Windows verification.
       - name: Test domain logic and portable Client Guard code
         run: cargo test -p openpiso-core -p client-guard
+
+  # Builds both NSIS installers natively (updater artifacts off, so no signing key)
+  # and smoke-tests them on the runner; see docs/development.md.
+  windows-installers:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build unsigned Admin and Client installers
+        run: bun run build:installers
+
+      - name: Smoke-test installers on this runner
+        shell: pwsh
+        run: ./scripts/windows/installer-smoke.ps1 -InstallerDir dist/installers -OutDir smoke-out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-installers
+          path: |
+            dist/installers/**/*-setup.exe
+            smoke-out/
+          retention-days: 7
+          if-no-files-found: warn

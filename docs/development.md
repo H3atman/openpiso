@@ -142,6 +142,23 @@ The local offline build explicitly overrides Admin's
 key. It does not change the shipped verification key or weaken App Update's
 signature checks. Do not use that override for CI releases.
 
+### Windows installer smoke test (CI)
+
+PR Check's `windows-installers` job runs `bun run build:installers` on
+`windows-latest` (unsigned, no secrets), then
+`scripts/windows/installer-smoke.ps1`. The script silently installs the Admin
+and asserts the installed exe, both `:3210` firewall rules (TCP and UDP), and an
+unconfigured Web Admin; installs the Client and asserts its exe and a running
+Guard service; sets up an Owner Session; and waits for the Client to appear as a
+Pending PC whose Approval Code matches its MAC and whose source IP is
+`127.0.0.1`. It never approves the PC. If the Guard cannot launch the Client (no
+console session), the script starts it and records `client_launched_by: script`.
+The installers and `smoke-out/installer-smoke.json` are uploaded as the
+`windows-installers` artifact (7 days). To run it by hand, use a disposable
+Windows machine with ports 3210/8080 free, in an elevated PowerShell:
+`.\scripts\windows\installer-smoke.ps1 -InstallerDir dist\installers` — it
+leaves both apps installed and the Guard service disabled.
+
 ### Signed Admin updater builds (#422 / #425)
 
 Admin's `apps/admin/src-tauri/tauri.conf.json` enables only the `nsis` bundle
