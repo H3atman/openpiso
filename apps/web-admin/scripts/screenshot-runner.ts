@@ -24,7 +24,7 @@ export interface ShotState {
   /** Grow the viewport to the document height; false for overlay states. */
   fullPage: boolean;
   click?: Target;
-  /** Replace the value of the input named `name` with `text`, as typed. */
+  /** Replace the value of the input named `name` with `text`, as typed; for a select, pick option value `text`. */
   fill?: Target & { text: string };
   /** Press Tab until this element holds keyboard focus. */
   tabTo?: Target;
@@ -145,7 +145,8 @@ async function capture<S extends ShotState>(
   // Drop the previous page's ready marker so the wait below sees only the new load.
   await evaluate(ws, "delete document.documentElement.dataset.harnessServed");
   await call(ws, "Page.navigate", { url: `${harnessUrl}?${options.query(state)}` });
-  if (!(await waitFor(ws, options.pageReady)))
+  // Generous: the first load waits on a cold Vite transform and dependency optimise.
+  if (!(await waitFor(ws, options.pageReady, 60_000)))
     throw new Error(`page never became ready: ${options.pageReady.replace(/\s+/g, " ")}`);
   await evaluate(ws, "document.fonts.ready.then(() => true)");
 
@@ -157,8 +158,17 @@ async function capture<S extends ShotState>(
   if (state.fill) {
     if (!(await evaluate(ws, `!!(${findInput(state.fill)})`)))
       throw new Error(`could not find ${describe(state.fill, "input")}`);
-    await evaluate(ws, `(() => { const el = ${findInput(state.fill)}; el.focus(); el.select(); return true; })()`);
-    await call(ws, "Input.insertText", { text: state.fill.text });
+    // A <select> takes `text` as the option value and fires `change`, as a pick would.
+    const picked = await evaluate(ws, `(() => {
+      const el = ${findInput(state.fill)};
+      el.focus();
+      if (!(el instanceof HTMLSelectElement)) return el.select(), false;
+      el.value = ${JSON.stringify(state.fill.text)};
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    })()`);
+    if (!picked) await call(ws, "Input.insertText", { text: state.fill.text });
   }
   if (state.tabTo) {
     if (!(await evaluate(ws, `!!(${find(state.tabTo)})`)))

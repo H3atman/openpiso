@@ -159,9 +159,9 @@ describe("Sales Report", () => {
   it("renders sales-only summary cards and the all-PC breakdown table", async () => {
     const view = render(ReportsPage);
 
-    await waitFor(() => expect(view.getByText("Summary")).toBeTruthy());
+    await waitFor(() => expect(view.getByText("PC Breakdown")).toBeTruthy());
     expect(api.getSalesReportOverview).toHaveBeenCalledOnce();
-    expect(view.getByText("PC Breakdown")).toBeTruthy();
+    expect(view.getByText("Summary")).toBeTruthy();
     expect(view.getAllByText("Daily Sales").length).toBe(2);
     expect(view.getAllByText("Weekly Sales").length).toBe(2);
     expect(view.getAllByText("Monthly Sales").length).toBe(2);
@@ -222,13 +222,19 @@ describe("Sales Report", () => {
     await waitFor(() => expect(api.getAttendanceReport).toHaveBeenCalledWith({
       period: "month",
     }));
-    await waitFor(() => expect(view.getByText("Outstanding Attendance Time (ignores selected date range)")).toBeTruthy());
+    const liability = await waitFor(() =>
+      view.getByRole("region", { name: "Outstanding Attendance Time" }),
+    );
     expect(view.getByText("Attendance Report")).toBeTruthy();
-    expect(view.getByText("Outstanding Attendance Time (ignores selected date range)")).toBeTruthy();
-    expect(view.getByText("Outstanding: 1 hour")).toBeTruthy();
-    expect(view.getByText("Claimable: 30 min")).toBeTruthy();
-    expect(view.getByText("Earned: 1 hour 30 min")).toBeTruthy();
-    expect(view.getByText("Attendance Check-Ins: 2")).toBeTruthy();
+    expect(within(liability).getByText("Outstanding")).toBeTruthy();
+    expect(within(liability).getByText("1 hour")).toBeTruthy();
+    expect(within(liability).getByText("Claimable")).toBeTruthy();
+    expect(within(liability).getByText("30 min")).toBeTruthy();
+    const flow = view.getByRole("region", { name: "Attendance flow" });
+    expect(within(flow).getByText("Earned")).toBeTruthy();
+    expect(within(flow).getByText("1 hour 30 min")).toBeTruthy();
+    expect(within(flow).getByText("Attendance Check-Ins")).toBeTruthy();
+    expect(within(flow).getByText("2")).toBeTruthy();
     expect(view.getByText("2026-08")).toBeTruthy();
     expect(view.getByText("Sep 30, 2026")).toBeTruthy();
     const earningMonths = view.getByRole("table", { name: "Attendance exposure by Earning Month" });
