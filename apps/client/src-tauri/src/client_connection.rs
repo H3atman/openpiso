@@ -106,6 +106,10 @@ struct ShopNameResponse {
 #[derive(Deserialize)]
 struct UnregisteredRejection {
     error: String,
+    /// Server-derived code the Lock shows so the owner can match this PC to
+    /// its Pending PC entry (ADR-0090). Absent from older servers.
+    #[serde(default)]
+    approval_code: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -310,7 +314,13 @@ async fn run_heartbeats(
                 if status == reqwest::StatusCode::NOT_FOUND {
                     match response.json::<UnregisteredRejection>().await {
                         Ok(rejection) if rejection.error == "pc_unregistered" => {
-                            set_unregistered(&shared, &app, request_started_at).await;
+                            set_unregistered(
+                                &shared,
+                                &app,
+                                request_started_at,
+                                rejection.approval_code,
+                            )
+                            .await;
                         }
                         Ok(_) | Err(_) => {
                             set_connection_error(
@@ -506,7 +516,9 @@ async fn run_event_stream(
             Ok(response) => {
                 let status = response.status();
                 if status == reqwest::StatusCode::NOT_FOUND {
-                    set_unregistered(&shared, &app, request_started_at).await;
+                    // The event stream carries no Approval Code; keep the one
+                    // the heartbeat last delivered.
+                    set_unregistered(&shared, &app, request_started_at, None).await;
                 } else if !status.is_success() {
                     let text = response
                         .text()
@@ -1550,8 +1562,14 @@ async fn set_connection_error(
 /// reached the admin, the admin is reachable, but the server does not
 /// know this machine. The Lock renders the "ask the owner" copy and
 /// retries quietly on the next tick. No `error` is set — the admin is
-/// healthy, it just has no row for us.
-async fn set_unregistered(shared: &SharedState, app: &AppHandle, request_started_at: Instant) {
+/// healthy, it just has no row for us. A `None` code keeps the last one,
+/// since the code is derived from this PC's fixed MAC.
+async fn set_unregistered(
+    shared: &SharedState,
+    app: &AppHandle,
+    request_started_at: Instant,
+    approval_code: Option<String>,
+) {
     let _transition = shared.connection_transition.lock().await;
     if shared
         .last_successful_connection
@@ -1569,6 +1587,9 @@ async fn set_unregistered(shared: &SharedState, app: &AppHandle, request_started
     let mut timer = shared.timer.write().await;
     timer.connected = false;
     timer.connection_status = "unregistered".to_owned();
+    if approval_code.is_some() {
+        timer.approval_code = approval_code;
+    }
     timer.offline_shutdown_in_seconds = None;
     timer.error = None;
     let snapshot = timer.clone();

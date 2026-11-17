@@ -2890,7 +2890,7 @@ mod tests {
     #[tokio::test]
     async fn an_older_schema_dump_forward_migrates_with_data_intact() -> AppResult<()> {
         let older_pool = crate::test_utils::schema_v12_mem_pool().await;
-        crate::db::seed(&older_pool).await?;
+        crate::db::seed_with_demo_pcs(&older_pool).await?;
         sqlx::query("INSERT INTO accounts (id, username, username_normalized, password_hash) VALUES ('acct-v12', 'Legacy User', 'legacy user', 'legacy-hash')")
             .execute(&older_pool)
             .await?;

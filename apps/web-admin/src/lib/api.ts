@@ -55,6 +55,7 @@ import type {
   PcMonitoringCheck,
   PcMonitoringStatus,
   PcRegisterInput,
+  PendingPc,
   PcSettings,
   PcSettingsInput,
   PendingPointsTransfer,
@@ -1131,6 +1132,20 @@ export function registerPc(input: PcRegisterInput): Promise<Pc> {
   return request<Pc>("/web-admin/pcs", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+/// `GET /web-admin/pcs/pending` — unknown Clients waiting for approval (ADR-0090).
+export function listPendingPcs(): Promise<PendingPc[]> {
+  return request<PendingPc[]>("/web-admin/pcs/pending");
+}
+
+/// `POST /web-admin/pcs/pending/approve` — adopt a Pending PC. The server
+/// assigns the id and name and binds the MAC and IP it observed.
+export function approvePendingPc(mac: string): Promise<Pc> {
+  return request<Pc>("/web-admin/pcs/pending/approve", {
+    method: "POST",
+    body: JSON.stringify({ mac }),
   });
 }
 

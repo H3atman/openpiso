@@ -890,6 +890,32 @@ inline advisory when the absolute value exceeds 60 seconds.
 Returns one PC or `404` when the ID is unknown. Owner/web-admin only —
 the per-PC client identity surface is MAC-keyed (see below).
 
+## Server Discovery (ADR-0090 §2)
+
+UDP datagrams on port `3210`, JSON bodies, wire types in
+`crates/openpiso-core/src/discovery.rs`. Only a Client with no saved server
+URL sends a request (the `discover_servers` Client command refuses
+otherwise); the Admin answers every valid one.
+
+Request, broadcast by the Client to `255.255.255.255:3210`:
+
+```json
+{ "openpiso": "discover", "v": 1 }
+```
+
+Reply, unicast by the Admin to the request's source address and port:
+
+```json
+{ "openpiso": "admin", "v": 1, "port": 3210, "shop_name": "Juan's Pisonet" }
+```
+
+`port` is the TCP device API port; `shop_name` is the current shop name
+(same value as `GET /api/shop`). The reply carries no host: the Client builds
+the server URL as `http://<reply source IP>:<port>`. Both sides silently
+ignore any datagram that does not decode as the expected message (other
+`openpiso` tag, other `v`, `port` 0, non-JSON). A Client round collects
+replies for about 1.5 s and deduplicates them by URL.
+
 ## Client identity (ADR-0031)
 
 Identity is **server-owned**: the client sends a per-boot MAC in the
@@ -999,8 +1025,15 @@ Responses:
   with support disabled and preserve the cached value when a later heartbeat
   omits the flag. Omission does not mark the Admin connection offline. The same
   flag is included in `pc.updated` events.
-- **404** with `{"error":"pc_unregistered"}` when the machine is
-  unknown. The client renders the "ask the owner" Lock copy.
+- **404** with `{"error":"pc_unregistered","approval_code":"EE0A"}` when
+  the machine is unknown (ADR-0090). When the `X-OpenPiso-Mac` header is six
+  colon-separated hex octets, the server remembers the machine in memory as a
+  Pending PC (capped at 64, forgotten 60 s after its last heartbeat) and adds
+  `approval_code`: the MAC's last four hex digits, uppercase. A missing or
+  malformed MAC gets the bare `{"error":"pc_unregistered"}` and is never
+  pending. The Client shows "Waiting for owner approval" with the code, or the
+  older "ask the owner" copy when the field is absent. `/disconnect` and
+  `/events` reject with the bare body and never record a Pending PC.
 - **4xx/5xx** for other failures (structurally malformed body, server error).
   The client maps these to the existing "Can't reach the server" copy.
 
@@ -1779,6 +1812,8 @@ list, create, download, delete, schedule, or restore Backups.
 | `GET /web-admin/today`                             | `get_today_report`             |                                                                                                                                        |
 | `GET /web-admin/pcs`                               | `list_pc_settings`             | owner view of PC names and terminal visibility                                                                                         |
 | `PUT /web-admin/pcs/{id}`                          | `update_pc_settings`           | `{ "name": string, "visible": bool }`                                                                                                  |
+| `GET /web-admin/pcs/pending`                       | –                              | Pending PCs (ADR-0090), newest first: `[{ "mac", "approval_code", "source_ip", "hostname", "client_version", "last_seen_seconds_ago" }]`; in memory only |
+| `POST /web-admin/pcs/pending/approve`              | –                              | `{ "mac": string }` → the created `Pc`. One transaction assigns the lowest free `pc-NN` id and `PC NN` name, binds the MAC, and stores the observed source IP as `registered_ip` unless another row holds it (then NULL); audits `pc_pre_registered`. 404 when the MAC is not pending; 409 (and the entry is dropped) when the MAC is already bound |
 | `POST /web-admin/pcs/{id}/sign-out`                | –                              | Owner Sign-Out: `{ "session_id": string }` → `{ "signed_out": bool, "username": string \| null }`; ends the Active Session, balance stays on the account; idempotent — a stale/mismatched `session_id` returns `signed_out: false` rather than ending another session; works on an unreachable PC |
 | `POST /web-admin/pc-monitoring/check/{pc_id}`      | –                              | PC Monitoring Check now (ADR-0076): one `PcMonitoringCheck`; strictly non-mutating; no request body — the probe target is always the row's server-owned `registered_ip` |
 | `POST /web-admin/pc-monitoring/check-all`          | –                              | Check now for every eligible PC (visible with a registered IP); one result per eligible PC; no body, no writes |

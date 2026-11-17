@@ -60,7 +60,9 @@ pub(crate) async fn wal_test_pool_with_max_connections(
     db::run_migrations(&pool, backup_directory.path())
         .await
         .expect("test migration should run");
-    db::seed(&pool).await.expect("test data should seed");
+    db::seed_with_demo_pcs(&pool)
+        .await
+        .expect("test data should seed");
     (pool, path)
 }
 
@@ -223,6 +225,8 @@ pub(crate) async fn mem_test_pool() -> SqlitePool {
     db::run_migrations(&pool, backup_directory.path())
         .await
         .expect("test migration should run");
-    db::seed(&pool).await.expect("test data should seed");
+    db::seed_with_demo_pcs(&pool)
+        .await
+        .expect("test data should seed");
     pool
 }

@@ -1,6 +1,7 @@
 # ADR-0031: Client configuration persistence and server-side PC identity
 
-- Status: Accepted
+- Status: Accepted. §2 step 3 ("reject unknown, pre-register only") and the
+  "no pending/adopt surface" consequence are superseded by ADR-0090.
 - Date: 2026-06-29
 - Deciders: shop owner (product)
 - Relates to: ADR-0027 (client lock & owner PIN gate), ADR-0028 (kiosk OS

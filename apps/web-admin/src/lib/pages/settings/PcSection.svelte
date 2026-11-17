@@ -12,7 +12,7 @@
   import SettingsField from "../../components/settings/SettingsField.svelte";
   import MonitorIcon from "@lucide/svelte/icons/monitor";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
-  import type { PcSettings } from "../../types";
+  import type { PcSettings, PendingPc } from "../../types";
 
   let pcs = $state<PcSettings[]>([]);
   let pcsBusy = $state(false);
@@ -24,6 +24,8 @@
   let pcEditValues = $state<Record<string, PcEdit>>({});
   let pcToRemove = $state<PcSettings | null>(null);
   let pcRemoveBusy = $state(false);
+  let pendingPcs = $state<PendingPc[]>([]);
+  let approveBusy = $state<string | null>(null);
 
   type PcEdit = { name: string; visible: boolean; registeredIp: string; macAddress: string };
 
@@ -132,12 +134,65 @@
     }
   }
 
+  /** Poll errors are ignored: the list just keeps its last good value. */
+  async function loadPendingPcs() {
+    try {
+      pendingPcs = await api.listPendingPcs();
+    } catch {
+      // Next poll retries.
+    }
+  }
+
+  async function approvePendingPc(mac: string): Promise<void> {
+    approveBusy = mac;
+    try {
+      await api.approvePendingPc(mac);
+      await Promise.all([loadPendingPcs(), loadPcs()]);
+      reportActionSuccess("approve", "PC");
+    } catch (caught) {
+      reportActionFailure("approve", "PC", caught);
+    } finally {
+      approveBusy = null;
+    }
+  }
+
   onMount(() => {
     void loadPcs();
+    void loadPendingPcs();
+    const pendingTimer = setInterval(() => void loadPendingPcs(), 3000);
+    return () => clearInterval(pendingTimer);
   });
 </script>
 
 <div class="space-y-6">
+  {#if pendingPcs.length > 0}
+    <SettingsCard
+      title="Waiting for approval"
+      description="These PCs are running the OpenPiso Client but haven't been added yet. Match the code on the PC's lock screen, then approve it."
+      flush
+    >
+      <ul class="divide-y">
+        {#each pendingPcs as pending (pending.mac)}
+          <li class="flex flex-wrap items-center gap-4 px-4 py-3 md:px-6">
+            <code class="rounded bg-muted px-2 py-1 font-mono text-lg font-semibold tracking-widest">{pending.approval_code}</code>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm font-medium">{pending.hostname}</p>
+              <p class="font-mono text-xs text-muted-foreground">{pending.source_ip}</p>
+            </div>
+            <Button
+              size="sm"
+              disabled={approveBusy !== null}
+              aria-label={`Approve ${pending.hostname} (code ${pending.approval_code})`}
+              onclick={() => void approvePendingPc(pending.mac)}
+            >
+              {approveBusy === pending.mac ? "Approving…" : "Approve"}
+            </Button>
+          </li>
+        {/each}
+      </ul>
+    </SettingsCard>
+  {/if}
+
   <SettingsCard
     title="Pre-register a PC"
     description="Add each PC by id and display name, with the static IP it lives on. On its next boot the Client binds its MAC to this row; later boots identify it by that MAC."

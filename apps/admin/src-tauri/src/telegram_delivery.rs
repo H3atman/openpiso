@@ -288,7 +288,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await?;
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 
@@ -740,7 +740,7 @@ mod tests {
             .connect_with(options.clone())
             .await?;
         crate::db::run_migrations(&first, directory.path()).await?;
-        crate::db::seed(&first).await?;
+        crate::db::seed_with_demo_pcs(&first).await?;
         let protector = FakeProtector::new(true);
         connect(&first, &protector).await?;
         enqueue(&first, "closure", "survives restart", at(6_000)).await?;
@@ -794,7 +794,7 @@ mod incident_delivery_tests {
             .connect("sqlite::memory:")
             .await?;
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 

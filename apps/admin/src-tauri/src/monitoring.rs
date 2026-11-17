@@ -997,7 +997,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await?;
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 
@@ -1345,7 +1345,7 @@ mod support {
             .connect("sqlite::memory:")
             .await?;
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 

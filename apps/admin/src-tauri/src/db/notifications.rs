@@ -456,7 +456,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await?;
         db::run_migrations(&pool, test_utils::migration_backup_dir().path()).await?;
-        db::seed(&pool).await?;
+        db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 

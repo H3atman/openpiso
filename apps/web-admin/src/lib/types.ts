@@ -1055,6 +1055,17 @@ export interface PcRegisterInput {
   registered_ip?: string | null;
 }
 
+/// An unknown Client the Heartbeat remembered (ADR-0090). In-memory on the
+/// server; the owner approves it to create its `pcs` row.
+export interface PendingPc {
+  mac: string;
+  approval_code: string;
+  source_ip: string;
+  hostname: string;
+  client_version: string;
+  last_seen_seconds_ago: number;
+}
+
 // ---------------------------------------------------------------------------
 // Points Transfer approvals (ADR-0030)
 // ---------------------------------------------------------------------------

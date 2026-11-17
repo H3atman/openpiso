@@ -237,16 +237,69 @@ pub async fn create_pc(
     }
 
     let mut transaction = super::begin_immediate(pool).await?;
+    insert_pc_in_transaction(&mut transaction, pc_id, name, registered_ip, None).await?;
+    transaction.commit().await?;
+
+    pc(pool, pc_id).await
+}
+
+/// Adopt a Pending PC (ADR-0090 §1). The server picks the next free `pc-NN`
+/// id and `PC NN` name, binds the observed MAC, and records the observed
+/// source IP as `registered_ip` unless another row already holds it. Both
+/// inputs come from the server's own Pending PC entry, never from a request.
+pub async fn adopt_pending_pc(pool: &SqlitePool, mac: &str, source_ip: &str) -> AppResult<Pc> {
+    let mut transaction = super::begin_immediate(pool).await?;
+    let mac_taken: Option<String> =
+        sqlx::query_scalar("SELECT id FROM pcs WHERE lower(mac_address) = ?")
+            .bind(mac)
+            .fetch_optional(&mut *transaction)
+            .await?;
+    if let Some(pc_id) = mac_taken {
+        return Err(AppError::Conflict(format!(
+            "this MAC is already bound to PC '{pc_id}'"
+        )));
+    }
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM pcs")
+        .fetch_all(&mut *transaction)
+        .await?;
+    let used: std::collections::HashSet<u32> = ids
+        .iter()
+        .filter_map(|id| id.strip_prefix("pc-")?.parse().ok())
+        .collect();
+    let number = (1..).find(|n| !used.contains(n)).unwrap_or(1);
+    let pc_id = format!("pc-{number:02}");
+    let name = format!("PC {number:02}");
+    let ip_taken: Option<String> = sqlx::query_scalar("SELECT id FROM pcs WHERE registered_ip = ?")
+        .bind(source_ip)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    let registered_ip = ip_taken.is_none().then_some(source_ip);
+    insert_pc_in_transaction(&mut transaction, &pc_id, &name, registered_ip, Some(mac)).await?;
+    transaction.commit().await?;
+
+    pc(pool, &pc_id).await
+}
+
+/// Insert one owner-created `pcs` row and its `pc_pre_registered` audit
+/// event. Shared by pre-registration (`mac_address` NULL) and Pending PC
+/// adoption (MAC already bound). A duplicate id is a 409.
+async fn insert_pc_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    pc_id: &str,
+    name: &str,
+    registered_ip: Option<&str>,
+    mac_address: Option<&str>,
+) -> AppResult<()> {
     let exists: Option<String> = sqlx::query_scalar("SELECT id FROM pcs WHERE id = ?")
         .bind(pc_id)
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(&mut **transaction)
         .await?;
     if exists.is_some() {
         return Err(AppError::Conflict(format!("PC '{pc_id}' already exists")));
     }
     sqlx::query(
         "INSERT INTO pcs (id, name, status, remaining_seconds, visible, registered_ip, mac_address)
-         VALUES (?, ?, 'offline', 0, 1, ?, NULL)",
+         VALUES (?, ?, 'offline', 0, 1, ?, ?)",
     )
     .bind(pc_id)
     .bind(name)
@@ -255,7 +308,8 @@ pub async fn create_pc(
             .map(str::trim)
             .filter(|value| !value.is_empty()),
     )
-    .execute(&mut *transaction)
+    .bind(mac_address)
+    .execute(&mut **transaction)
     .await?;
     // The FK `pc_id` is intentionally left NULL and the id recorded in
     // metadata instead (ADR-0044). audit_log is append-only + FK-protected to
@@ -273,11 +327,10 @@ pub async fn create_pc(
         "pc_id": pc_id,
         "name": name,
         "registered_ip": registered_ip,
+        "mac_address": mac_address,
     });
-    audit::append(&mut transaction, event).await?;
-    transaction.commit().await?;
-
-    pc(pool, pc_id).await
+    audit::append(transaction, event).await?;
+    Ok(())
 }
 
 /// Hard-delete a clean PC row (issue #112 / ADR-0044). Removal is permitted
@@ -886,8 +939,25 @@ mod tests {
             .connect("sqlite::memory:")
             .await?;
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
+    }
+
+    #[tokio::test]
+    async fn fresh_install_has_no_pcs_and_adopts_pc_01_first() -> AppResult<()> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
+        // Production seed only: runs on every launch and on Backup restore.
+        crate::db::seed(&pool).await?;
+        crate::db::seed(&pool).await?;
+        assert!(pcs(&pool).await?.is_empty());
+
+        let pc = adopt_pending_pc(&pool, "aa:bb:cc:dd:ee:01", "192.168.1.41").await?;
+        assert_eq!((pc.id.as_str(), pc.name.as_str()), ("pc-01", "PC 01"));
+        Ok(())
     }
 
     #[tokio::test]

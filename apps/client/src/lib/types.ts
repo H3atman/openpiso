@@ -1,3 +1,9 @@
+/** An Admin that answered Server Discovery (ADR-0090 §2). */
+export interface DiscoveredServer {
+  url: string;
+  shop_name: string;
+}
+
 export interface ClientConfig {
   server_url: string;
   /**
@@ -67,6 +73,8 @@ export interface TimerState {
   active_username: string | null;
   connected: boolean;
   connection_status: ConnectionStatus;
+  /** Server-derived Approval Code while `unregistered` (ADR-0090). */
+  approval_code?: string | null;
   expired: boolean;
   overlay_locked: boolean;
   /** A Tamper Kill report is awaiting the authoritative heartbeat. */

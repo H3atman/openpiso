@@ -82,9 +82,10 @@ HTTP servers):
 bun run dev:admin
 ```
 
-In a second shell, start the client Tauri app for each rentable PC and
-point it at the admin's LAN address. The client window is per-PC; the
-default PC ID is `pc-01`.
+In a second shell, start the client Tauri app for each rentable PC. A Client
+with no saved server URL finds the admin on the LAN by itself (Server
+Discovery, ADR-0090 §2) and connects; the server assigns the PC its id when
+the owner approves it in Settings → PCs. The Client never chooses one.
 
 ```bash
 bun run dev:client
@@ -319,15 +320,20 @@ the owner account recovery path and the kiosk account behavior.
 The admin binds:
 
 - `0.0.0.0:3210` — client/device HTTP API and SSE event stream.
+- `0.0.0.0:3210` UDP — Server Discovery responder (ADR-0090 §2). It only
+  answers unconfigured Clients' broadcasts with the API port and shop name;
+  if the bind fails the admin logs a warning and runs without discovery.
 - `0.0.0.0:8080` — owner PIN login, dashboard, settings, reports,
   audit, accounts, and the bundled web-admin static assets at
   `/admin`. **The Central Terminal Tauri window is not on these
   ports**; it is a desktop window on the server PC.
 
 The owner browser URL is `http://<server-lan-ip>:8080/admin`. The
-default seeded data installs the four demo PCs (`pc-01`…`pc-04`),
-the `₱1 = 5 minutes` rate, and the `dev-simulator` coin source so
-the kiosk works without a serial acceptor wired in.
+default seeded data installs the `₱1 = 5 minutes` rate and the
+`dev-simulator` coin source so the kiosk works without a serial
+acceptor wired in. A fresh install has no PCs: they appear when the
+owner approves a Client in Settings → PCs or pre-registers one by
+static IP (ADR-0090). Databases from earlier versions keep their rows.
 
 ### Central Terminal Autostart (ADR-0055)
 
@@ -414,6 +420,35 @@ options:
 The `:3210` client/device API follows the same rule but is more
 permissive: it must be reachable by every rentable PC on the LAN, so
 it lives on the same VLAN as the PCs themselves.
+
+### Windows Firewall for `:3210` (TCP and UDP)
+
+The admin installer adds two inbound rules on the server PC: **OpenPiso
+device API** (TCP 3210) and **OpenPiso discovery** (UDP 3210, for Server
+Discovery). Both apply on every network profile, because shop LANs are often
+left on Public, and are scoped to the local subnet instead. The installer runs
+without administrator rights, so the first install shows one UAC prompt to add
+them; updates over an install that already has both rules do not prompt.
+Uninstalling removes them (an update does not). The installer never opens
+TCP 8080.
+
+That prompt names **Windows Command Processor** (verified publisher: Microsoft
+Windows), not OpenPiso, because the installer uses the Windows command prompt
+to add the rules. This is expected: choose **Yes**. The install finishes either
+way.
+
+If the UAC prompt was declined or left unanswered, or Clients show "Looking for the OpenPiso
+server…" forever while manual entry works, add the rules from an elevated
+prompt:
+
+```text
+netsh advfirewall firewall add rule name="OpenPiso device API" dir=in action=allow protocol=TCP localport=3210 remoteip=localsubnet
+netsh advfirewall firewall add rule name="OpenPiso discovery" dir=in action=allow protocol=UDP localport=3210 remoteip=localsubnet
+```
+
+Clients need no rule: discovery replies come back to the port the Client
+sent from. A broadcast stays on the local network segment, so a Client on a
+different subnet or VLAN from the server must use manual entry.
 
 > Current implementation note: ADR-0074's CSRF, SameSite, expiry, token
 > rotation, and socket cancellation are accepted but not implemented. Keep the
@@ -860,20 +895,26 @@ For a post-release Attendance defect, use this rollback ladder:
 - [ ] `bun run dev:admin` starts the Tauri kiosk window.
 - [ ] `http://127.0.0.1:8080/admin` renders the login shell.
 - [ ] `POST /web-admin/setup` issues a cookie token and the
-      dashboard loads four demo PCs.
-- [ ] **Pre-register each PC** (ADR-0031): in the web admin
-      (Settings → PCs → Pre-register), add a row with the PC's
-      display name, the static IP it lives on, and leave the MAC
-      field blank. The first boot from that IP binds the row's MAC.
+      dashboard loads with no PCs yet.
+- [ ] **Add each PC** (ADR-0090): install and launch the Client; it
+      finds the server by itself ("Looking for the OpenPiso server…"),
+      or lists the shops it found when there are several. Then approve
+      the PC in the web admin under Settings → PCs → Waiting for
+      approval, matching the code on its lock screen. Fallback:
+      **Enter address manually** on the lock screen and type the server's
+      LAN IP (`192.168.1.10`, `192.168.1.10:3210`, or the full
+      `http://192.168.1.10:3210`). Alternative (ADR-0031): pre-register a row
+      with the PC's static IP under Settings → PCs → Pre-register;
+      the first boot from that IP binds the row's MAC.
 - [ ] `POST /web-admin/coin-device/test` returns
       `{ ok: true, simulator: true, message: "No COM port
       configured; running on the simulator source." }`.
 - [ ] `:3210/health` returns `{ status: "ok", version: … }`.
 - [ ] A client Tauri app on a different PC heartbeats against
       `<server-lan-ip>:3210` and its row turns `online` on the
-      dashboard. On the first boot the client shows "Registering
-      this PC…", then "This PC isn't registered yet" until the
-      pre-registration row exists.
+      dashboard. On the first boot the client shows "Waiting for
+      owner approval" with its Approval Code until the owner
+      approves it (or a pre-registration row binds it).
 - [ ] A subsequent reboot of the same client identifies by MAC
       and reconnects without re-binding. The client never asks the
       owner to type a PC ID — the server owns the binding.

@@ -142,6 +142,9 @@ pub struct OwnerServerState {
     /// Diagnostic Request the Heartbeat delivers and the Client's slice
     /// answer consumes (ADR-0078).
     pub diagnostic_requests: crate::diagnostic_request::DiagnosticRequestRegistry,
+    /// Shared with the client API (`:3210`): the Heartbeat records unknown
+    /// Clients as Pending PCs and the owner approves them here (ADR-0090).
+    pub pending_pcs: crate::pending_pc::PendingPcRegistry,
     /// Admin Run Records (ADR-0082): the host-diagnostics endpoint and the
     /// Support Bundle read the same store, so the owner's screen and the
     /// bundle cannot disagree.
@@ -410,6 +413,10 @@ pub(crate) fn router(state: OwnerServerState) -> Router {
         .route("/web-admin/transactions", get(transactions))
         .route("/web-admin/today", get(today_report))
         .route("/web-admin/pcs", get(list_pc_settings).post(register_pc))
+        // Pending PCs (ADR-0090): listed and adopted here, recorded by the
+        // `:3210` Heartbeat. Static paths win over `/web-admin/pcs/{id}`.
+        .route("/web-admin/pcs/pending", get(list_pending_pcs))
+        .route("/web-admin/pcs/pending/approve", post(approve_pending_pc))
         .route(
             "/web-admin/pcs/{id}",
             axum::routing::put(update_pc_settings).delete(remove_pc),
@@ -990,6 +997,49 @@ async fn register_pc(
         input.registered_ip.as_deref(),
     )
     .await?;
+    state
+        .events
+        .publish_pc_updated(state.sessions.enrich_pc(pc.clone()).await);
+    Ok(Json(pc))
+}
+
+async fn list_pending_pcs(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+) -> Json<Vec<crate::pending_pc::PendingPcView>> {
+    Json(state.pending_pcs.list(std::time::Instant::now()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingPcApproveInput {
+    mac: String,
+}
+
+/// `POST /web-admin/pcs/pending/approve` — adopt a Pending PC (ADR-0090 §1).
+/// The MAC is only a lookup key: id, name, MAC and IP all come from the
+/// server's own Pending PC entry. A MAC that is not currently pending is 404.
+async fn approve_pending_pc(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+    Json(input): Json<PendingPcApproveInput>,
+) -> HttpResult<Pc> {
+    let pending = state
+        .pending_pcs
+        .get(&input.mac, std::time::Instant::now())
+        .ok_or_else(|| AppError::NotFound("Pending PC".to_owned()))?;
+    let pc = match db::adopt_pending_pc(&state.pool, &pending.mac, &pending.source_ip).await {
+        Ok(pc) => pc,
+        // The only reachable conflict is "MAC already bound": a heartbeat
+        // re-recorded the knock while another approval or a PC edit bound
+        // the MAC. Drop the stale entry so it cannot linger.
+        Err(error @ AppError::Conflict(_)) => {
+            state.pending_pcs.remove(&pending.mac);
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
+    state.pending_pcs.remove(&pending.mac);
     state
         .events
         .publish_pc_updated(state.sessions.enrich_pc(pc.clone()).await);
@@ -3571,7 +3621,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
 
         let sessions = SessionStore::default();
         let events = EventHub::without_ui();
@@ -3619,6 +3671,7 @@ mod tests {
             telegram: telegram_service,
             guards: crate::guard_poll::GuardRegistry::new(),
             diagnostic_requests: crate::diagnostic_request::DiagnosticRequestRegistry::new(),
+            pending_pcs: crate::pending_pc::PendingPcRegistry::new(),
             run_records: Arc::new(crate::run_record::RunRecordStore::new(
                 data_dir.join(crate::run_record::RUN_RECORDS_FILE_NAME),
                 Arc::new(crate::run_record::SystemClock),
@@ -3667,6 +3720,7 @@ mod tests {
             crate::guard_poll::GuardRegistry::new(),
             crate::forwarded_log::test_forwarded_log(),
             state.diagnostic_requests.clone(),
+            state.pending_pcs.clone(),
         );
         tokio::spawn(async move {
             axum::serve(
@@ -8773,6 +8827,320 @@ mod tests {
             .await
             .expect("pc lookup");
         assert!(gone.is_none());
+    }
+
+    /// Both routers on real sockets sharing one Pending PC store (ADR-0090),
+    /// plus an Owner Session on the `:8080` side.
+    struct AdoptionFixture {
+        pool: SqlitePool,
+        client: reqwest::Client,
+        client_address: String,
+        owner_address: String,
+        auth: OwnerAuth,
+    }
+
+    impl AdoptionFixture {
+        async fn new() -> Self {
+            let state = test_state().await;
+            let pool = state.pool.clone();
+            let client_address = spawn_client_server(&state).await;
+            let owner_address = spawn(state).await;
+            let client = reqwest::Client::new();
+            let auth = setup_and_token(&client, &owner_address, "1234").await;
+            Self {
+                pool,
+                client,
+                client_address,
+                owner_address,
+                auth,
+            }
+        }
+
+        /// A Client heartbeat; `mac` is the raw `X-OpenPiso-Mac` value.
+        async fn heartbeat(&self, mac: Option<&str>) -> reqwest::Response {
+            let mut request = self
+                .client
+                .post(format!(
+                    "http://{}/api/identity/heartbeat",
+                    self.client_address
+                ))
+                .json(&serde_json::json!({ "hostname": "front-desk", "client_version": "9.9.9" }));
+            if let Some(mac) = mac {
+                request = request.header("X-OpenPiso-Mac", mac);
+            }
+            request.send().await.expect("heartbeat should complete")
+        }
+
+        async fn pending(&self) -> Vec<serde_json::Value> {
+            let response = self
+                .client
+                .get(format!(
+                    "http://{}/web-admin/pcs/pending",
+                    self.owner_address
+                ))
+                .owner(&self.auth)
+                .send()
+                .await
+                .expect("pending list should complete");
+            assert_eq!(response.status(), StatusCode::OK);
+            response.json().await.expect("pending list should be JSON")
+        }
+
+        async fn approve(&self, mac: &str) -> reqwest::Response {
+            self.client
+                .post(format!(
+                    "http://{}/web-admin/pcs/pending/approve",
+                    self.owner_address
+                ))
+                .owner(&self.auth)
+                .json(&serde_json::json!({ "mac": mac }))
+                .send()
+                .await
+                .expect("approve should complete")
+        }
+
+        async fn pc_binding(&self, pc_id: &str) -> (Option<String>, Option<String>) {
+            sqlx::query_as("SELECT mac_address, registered_ip FROM pcs WHERE id = ?")
+                .bind(pc_id)
+                .fetch_one(&self.pool)
+                .await
+                .expect("pc row should exist")
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_pc_is_approved_and_then_identifies_by_mac() {
+        let fixture = AdoptionFixture::new().await;
+        let mac = "AA:BB:CC:DD:EE:0A";
+
+        let rejected = fixture.heartbeat(Some(mac)).await;
+        assert_eq!(rejected.status(), StatusCode::NOT_FOUND);
+        let body: serde_json::Value = rejected.json().await.expect("rejection body is JSON");
+        assert_eq!(
+            body,
+            serde_json::json!({ "error": "pc_unregistered", "approval_code": "EE0A" })
+        );
+
+        let pending = fixture.pending().await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["mac"], "aa:bb:cc:dd:ee:0a");
+        assert_eq!(pending[0]["approval_code"], "EE0A");
+        assert_eq!(pending[0]["hostname"], "front-desk");
+        assert_eq!(pending[0]["client_version"], "9.9.9");
+        assert_eq!(pending[0]["source_ip"], "127.0.0.1");
+
+        let approved = fixture.approve(mac).await;
+        assert_eq!(approved.status(), StatusCode::OK);
+        let pc: serde_json::Value = approved.json().await.expect("approved PC is JSON");
+        // Seeded demo rows hold pc-01..pc-04, so the next free id is pc-05.
+        assert_eq!(pc["id"], "pc-05");
+        assert_eq!(pc["name"], "PC 05");
+        assert_eq!(
+            fixture.pc_binding("pc-05").await,
+            (
+                Some("aa:bb:cc:dd:ee:0a".to_owned()),
+                Some("127.0.0.1".to_owned())
+            )
+        );
+        assert!(fixture.pending().await.is_empty());
+
+        let identified = fixture.heartbeat(Some(mac)).await;
+        assert_eq!(identified.status(), StatusCode::OK);
+        let heartbeat: serde_json::Value = identified.json().await.expect("heartbeat is JSON");
+        assert_eq!(heartbeat["id"], "pc-05");
+        assert!(fixture.pending().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_without_a_well_formed_mac_is_never_pending() {
+        let fixture = AdoptionFixture::new().await;
+        for mac in [
+            None,
+            Some(""),
+            Some("not-a-mac"),
+            Some("aa:bb:cc:dd:ee"),
+            Some("aa-bb-cc-dd-ee-ff"),
+        ] {
+            let response = fixture.heartbeat(mac).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "mac {mac:?}");
+            let body: serde_json::Value = response.json().await.expect("rejection body is JSON");
+            assert_eq!(
+                body,
+                serde_json::json!({ "error": "pc_unregistered" }),
+                "mac {mac:?}"
+            );
+        }
+        assert!(fixture.pending().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn events_and_disconnect_never_record_a_pending_pc() {
+        let fixture = AdoptionFixture::new().await;
+        let events = fixture
+            .client
+            .get(format!(
+                "http://{}/api/identity/events",
+                fixture.client_address
+            ))
+            .header("X-OpenPiso-Mac", "aa:bb:cc:dd:ee:01")
+            .send()
+            .await
+            .expect("events should complete");
+        assert_eq!(events.status(), StatusCode::NOT_FOUND);
+        let disconnect = fixture
+            .client
+            .post(format!(
+                "http://{}/api/identity/disconnect",
+                fixture.client_address
+            ))
+            .header("X-OpenPiso-Mac", "aa:bb:cc:dd:ee:02")
+            .send()
+            .await
+            .expect("disconnect should complete");
+        assert_eq!(disconnect.status(), StatusCode::NOT_FOUND);
+        assert!(fixture.pending().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approve_requires_owner_session_and_a_pending_mac() {
+        let fixture = AdoptionFixture::new().await;
+        let mac = "aa:bb:cc:dd:ee:03";
+        assert_eq!(
+            fixture.heartbeat(Some(mac)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let anonymous = fixture
+            .client
+            .post(format!(
+                "http://{}/web-admin/pcs/pending/approve",
+                fixture.owner_address
+            ))
+            .json(&serde_json::json!({ "mac": mac }))
+            .send()
+            .await
+            .expect("approve should complete");
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+        let anonymous_list = fixture
+            .client
+            .get(format!(
+                "http://{}/web-admin/pcs/pending",
+                fixture.owner_address
+            ))
+            .send()
+            .await
+            .expect("pending list should complete");
+        assert_eq!(anonymous_list.status(), StatusCode::UNAUTHORIZED);
+
+        assert_eq!(
+            fixture.approve("aa:bb:cc:dd:ee:99").await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(fixture.pending().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn preregistered_ip_row_still_binds_and_is_never_pending() {
+        let fixture = AdoptionFixture::new().await;
+        db::create_pc(&fixture.pool, "pc-50", "Counter 50", Some("127.0.0.1"))
+            .await
+            .expect("pre-register should succeed");
+
+        let response = fixture.heartbeat(Some("aa:bb:cc:dd:ee:04")).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let heartbeat: serde_json::Value = response.json().await.expect("heartbeat is JSON");
+        assert_eq!(heartbeat["id"], "pc-50");
+        assert_eq!(
+            fixture.pc_binding("pc-50").await.0.as_deref(),
+            Some("aa:bb:cc:dd:ee:04")
+        );
+        assert!(fixture.pending().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approval_leaves_registered_ip_null_when_another_row_holds_it() {
+        let fixture = AdoptionFixture::new().await;
+        // A bound row already owns 127.0.0.1, so the IP bootstrap cannot fire.
+        db::create_pc(&fixture.pool, "pc-50", "Counter 50", Some("127.0.0.1"))
+            .await
+            .expect("pre-register should succeed");
+        sqlx::query("UPDATE pcs SET mac_address = 'aa:bb:cc:dd:ee:50' WHERE id = 'pc-50'")
+            .execute(&fixture.pool)
+            .await
+            .expect("mac bind");
+
+        let mac = "aa:bb:cc:dd:ee:05";
+        assert_eq!(
+            fixture.heartbeat(Some(mac)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        let approved = fixture.approve(mac).await;
+        assert_eq!(approved.status(), StatusCode::OK);
+        let pc: serde_json::Value = approved.json().await.expect("approved PC is JSON");
+        assert_eq!(pc["id"], "pc-05");
+        assert_eq!(
+            fixture.pc_binding("pc-05").await,
+            (Some(mac.to_owned()), None)
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_list_is_capped_at_64_macs() {
+        let fixture = AdoptionFixture::new().await;
+        for index in 0..65 {
+            let mac = format!("aa:bb:cc:dd:ee:{index:02x}");
+            assert_eq!(
+                fixture.heartbeat(Some(&mac)).await.status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        let pending = fixture.pending().await;
+        assert_eq!(pending.len(), 64);
+        assert!(!pending
+            .iter()
+            .any(|entry| entry["mac"] == "aa:bb:cc:dd:ee:40"));
+    }
+
+    #[tokio::test]
+    async fn approving_an_already_bound_mac_conflicts_and_clears_the_entry() {
+        let fixture = AdoptionFixture::new().await;
+
+        // Approving twice: the second sees no pending entry.
+        let first = "aa:bb:cc:dd:ee:06";
+        assert_eq!(
+            fixture.heartbeat(Some(first)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(fixture.approve(first).await.status(), StatusCode::OK);
+        assert_eq!(fixture.approve(first).await.status(), StatusCode::NOT_FOUND);
+
+        // The race: the MAC gets bound to a row while it is still pending.
+        let raced = "aa:bb:cc:dd:ee:07";
+        assert_eq!(
+            fixture.heartbeat(Some(raced)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        let bind = fixture
+            .client
+            .put(format!(
+                "http://{}/web-admin/pcs/pc-01",
+                fixture.owner_address
+            ))
+            .owner(&fixture.auth)
+            .json(&serde_json::json!({
+                "name": "PC 01",
+                "visible": true,
+                "registered_ip": null,
+                "mac_address": raced,
+            }))
+            .send()
+            .await
+            .expect("pc edit should complete");
+        assert_eq!(bind.status(), StatusCode::OK);
+        assert_eq!(fixture.pending().await.len(), 1);
+
+        assert_eq!(fixture.approve(raced).await.status(), StatusCode::CONFLICT);
+        assert!(fixture.pending().await.is_empty());
     }
 
     // Stable targets on either side of the running binary, independent of version bumps.

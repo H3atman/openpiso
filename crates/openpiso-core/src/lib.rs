@@ -1,6 +1,7 @@
 pub mod account;
 pub mod audit;
 pub mod backup_schedule;
+pub mod discovery;
 pub mod forwarding;
 pub mod guard;
 pub mod notification;

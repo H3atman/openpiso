@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { Button } from "$lib/components/ui/button";
   import type { AccountAuth, AttendanceSummary, ClientConfig, RedemptionTierMenu, ShopStatus, TimerState, ViewMode } from "$lib/types";
@@ -9,6 +9,8 @@
   import { isStaleMenuError, loadSortedTierMenu } from "$lib/redemption";
   import AccountPanel from "$lib/components/AccountPanel.svelte";
   import { createSpinMachine } from "$lib/machines/spin.svelte";
+  import { createSetupMachine } from "$lib/machines/setup.svelte";
+  import type { SetupState } from "$lib/machines/setup";
   import WheelDialog from "$lib/components/WheelDialog.svelte";
   import WheelEntry from "$lib/components/WheelEntry.svelte";
   import AuthForm from "$lib/components/AuthForm.svelte";
@@ -73,7 +75,7 @@
     : surface.left === "unregistered" ? "Authentication unavailable until the owner registers this PC."
     : "");
   const copy: Record<LockSurfaceLeft, { label: string; title: string; guidance: string }> = {
-    setup: { label: "Setup required", title: "Set up this PC", guidance: "Enter the admin server URL to connect this PC." },
+    setup: { label: "Setting up", title: "Looking for the OpenPiso server…", guidance: "This PC connects by itself once it finds the server on this network." },
     unregistered: { label: "Unregistered", title: "This PC isn't registered", guidance: "Ask the owner to add it in web-admin (Settings → PCs). Once registered, the next heartbeat will bind this machine." },
     connecting: { label: "Connecting", title: "Reaching the admin server", guidance: "Please wait while this PC connects." },
     disconnected: { label: "Disconnected", title: "Can't reach server", guidance: "Check the admin server URL and that the server is running." },
@@ -83,9 +85,36 @@
     shop_closed: { label: "Shop Closed", title: "Shop Closed", guidance: "New logins, signups, vouchers, and coins are unavailable until the shop opens." },
     insert_coin: { label: "Awaiting payment", title: "Insert coin", guidance: "Insert coins at the OpenPiso terminal to add time to this PC." },
   };
+  // Server Discovery for a Client with no saved server URL (ADR-0090 §2).
+  const setup = createSetupMachine({ save: saveAndConnect });
+  $effect(() => {
+    if (configured) return;
+    untrack(() => setup.start());
+    return () => setup.stop();
+  });
+  function setupCopy(state: SetupState): { label: string; title: string; guidance: string } {
+    switch (state.kind) {
+      case "searching":
+      case "waiting":
+        return copy.setup;
+      case "choosing":
+        return { label: "Setting up", title: "Choose this shop's server", guidance: "More than one OpenPiso server answered. Pick the one for this shop." };
+      case "manual":
+        return { label: "Setting up", title: "Enter the server address", guidance: "Type the server PC's LAN address, for example 192.168.1.10." };
+      case "saving":
+      case "saved":
+        return { label: "Setting up", title: "Connecting to the server…", guidance: "Saving the server address for this PC." };
+      default: {
+        const unreachable: never = state;
+        return unreachable;
+      }
+    }
+  }
   const currentCopy = $derived(surface.left === "session_ended" && guestSessionPaused
     ? { label: "Session ended", title: "Guest session paused", guidance: "Your Guest Time is still available on this PC." }
-    : copy[surface.left]);
+    : surface.left === "unregistered" && timer?.approval_code
+      ? { label: "Waiting for approval", title: "Waiting for owner approval", guidance: `Approve this PC in the Web Admin under Settings → PCs. Code: ${timer.approval_code}` }
+      : surface.left === "setup" ? setupCopy(setup.state) : copy[surface.left]);
 
   async function resumeGuestSession(): Promise<void> {
     if (continuingGuestSession) return;
@@ -177,6 +206,25 @@
         <strong class:text-destructive={countdown <= 10} class:text-foreground={countdown > 10} class="mt-3 font-mono text-[clamp(7rem,24vw,15rem)] leading-none tabular-nums" role="timer" aria-live="assertive" aria-label={`${countdown} seconds until shutdown`}>{String(countdown).padStart(2, "0")}</strong>
       {:else}<h2 class="mt-4 max-w-2xl text-4xl font-black sm:text-5xl">{currentCopy.title}</h2>{/if}
       <p class="mt-5 max-w-xl text-base text-muted-foreground sm:text-lg">{surface.left === "shop_closed" ? closedGuidance : currentCopy.guidance}</p>
+      {#if surface.left === "setup"}
+        {@const setupState = setup.state}
+        <div class="mt-6 flex w-full max-w-md flex-col items-center gap-3">
+          {#if setupState.kind === "choosing"}
+            <ul class="flex w-full flex-col gap-2">
+              {#each setupState.servers as server (server.url)}
+                <li><button type="button" class="w-full rounded-lg border border-border bg-card px-4 py-3 text-left hover:border-primary" onclick={() => setup.pick(server.url)}><span class="block font-bold">{server.shop_name}</span><span class="block font-mono text-sm text-muted-foreground">{server.url}</span></button></li>
+              {/each}
+            </ul>
+            <div class="flex gap-2"><Button type="button" variant="ghost" size="sm" onclick={setup.search}>Search again</Button><Button type="button" variant="ghost" size="sm" onclick={setup.enterManually}>Enter address manually</Button></div>
+          {:else if setupState.kind === "manual"}
+            {#if setupState.error}<Banner kind="error">{setupState.error}</Banner>{/if}
+            <div class="w-full text-left"><SettingsForm inputId="setup-server-url" serverUrl={setupState.address} connected={false} {busy} onSaveAndConnect={setup.submit} onDisconnect={disconnect} showDisconnect={false} /></div>
+            <Button type="button" variant="ghost" size="sm" onclick={setup.search}>Search again</Button>
+          {:else if setupState.kind === "searching" || setupState.kind === "waiting"}
+            <Button type="button" variant="ghost" size="sm" onclick={setup.enterManually}>Enter address manually</Button>
+          {/if}
+        </div>
+      {/if}
       {#if guestSessionPaused}
         <Button type="button" class="mt-6" disabled={continuingGuestSession || busy} onclick={resumeGuestSession}>Continue Guest session</Button>
       {/if}
