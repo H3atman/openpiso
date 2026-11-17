@@ -17,6 +17,7 @@ mod commands;
 mod db;
 mod diagnostic_request;
 mod diagnostics;
+mod discovery;
 mod errors;
 mod events;
 mod forwarded_log;
@@ -300,6 +301,20 @@ pub fn run() {
                 .await
                 {
                     error!("OpenPiso local server stopped: {error}");
+                }
+            });
+
+            // Server Discovery (ADR-0090 §2): answer unconfigured Clients'
+            // UDP broadcasts on the device API port. A convenience only, so a
+            // failed bind is a warning and startup continues.
+            let discovery_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                match tokio::net::UdpSocket::bind(("0.0.0.0", openpiso_core::discovery::DISCOVERY_PORT)).await {
+                    Ok(socket) => discovery::serve(socket, discovery_pool).await,
+                    Err(error) => tracing::warn!(
+                        "Server Discovery unavailable: could not bind UDP 0.0.0.0:{}: {error}",
+                        openpiso_core::discovery::DISCOVERY_PORT
+                    ),
                 }
             });
 

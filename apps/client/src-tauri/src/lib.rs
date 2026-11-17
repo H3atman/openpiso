@@ -4,6 +4,7 @@ mod commands;
 mod config_store;
 mod diagnostic_request;
 mod diagnostics;
+mod discovery;
 mod forwarding;
 mod guard_client;
 mod kiosk_hardening;
@@ -282,6 +283,7 @@ pub fn run() {
             commands::frontend_ready,
             commands::get_client_config,
             commands::is_client_configured,
+            commands::discover_servers,
             commands::set_client_config,
             commands::is_windows_platform,
             commands::connect_to_server,

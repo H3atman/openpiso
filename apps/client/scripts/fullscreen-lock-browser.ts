@@ -76,7 +76,7 @@ async function waitFor(
 }
 
 const scenarios = [
-  ["setup", "config=fresh&lock=setup", "Set up this PC"],
+  ["setup", "config=fresh&lock=setup", "Looking for the OpenPiso server"],
   ["unregistered", "lock=unregistered", "This PC isn't registered"],
   ["connecting", "lock=connecting", "Reaching the admin server"],
   ["disconnected", "lock=disconnected", "Can't reach server"],

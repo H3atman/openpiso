@@ -82,10 +82,10 @@ HTTP servers):
 bun run dev:admin
 ```
 
-In a second shell, start the client Tauri app for each rentable PC and
-point it at the admin's LAN address. The server assigns the PC its id when
-the owner approves it in Settings → PCs (ADR-0090); the Client never
-chooses one.
+In a second shell, start the client Tauri app for each rentable PC. A Client
+with no saved server URL finds the admin on the LAN by itself (Server
+Discovery, ADR-0090 §2) and connects; the server assigns the PC its id when
+the owner approves it in Settings → PCs. The Client never chooses one.
 
 ```bash
 bun run dev:client
@@ -320,6 +320,9 @@ the owner account recovery path and the kiosk account behavior.
 The admin binds:
 
 - `0.0.0.0:3210` — client/device HTTP API and SSE event stream.
+- `0.0.0.0:3210` UDP — Server Discovery responder (ADR-0090 §2). It only
+  answers unconfigured Clients' broadcasts with the API port and shop name;
+  if the bind fails the admin logs a warning and runs without discovery.
 - `0.0.0.0:8080` — owner PIN login, dashboard, settings, reports,
   audit, accounts, and the bundled web-admin static assets at
   `/admin`. **The Central Terminal Tauri window is not on these
@@ -417,6 +420,23 @@ options:
 The `:3210` client/device API follows the same rule but is more
 permissive: it must be reachable by every rentable PC on the LAN, so
 it lives on the same VLAN as the PCs themselves.
+
+### Windows Firewall for `:3210` (TCP and UDP)
+
+The admin installer adds no firewall rules. Windows usually prompts the
+first time the admin listens; allow it on the **Private** network profile.
+Server Discovery also needs **inbound UDP 3210** on the server PC. If the
+prompt was dismissed, or Clients show "Looking for the OpenPiso server…"
+forever while manual entry works, add both rules from an elevated prompt:
+
+```text
+netsh advfirewall firewall add rule name="OpenPiso device API" dir=in action=allow protocol=TCP localport=3210 profile=private
+netsh advfirewall firewall add rule name="OpenPiso discovery" dir=in action=allow protocol=UDP localport=3210 profile=private
+```
+
+Clients need no rule: discovery replies come back to the port the Client
+sent from. A broadcast stays on the local network segment, so a Client on a
+different subnet or VLAN from the server must use manual entry.
 
 > Current implementation note: ADR-0074's CSRF, SameSite, expiry, token
 > rotation, and socket cancellation are accepted but not implemented. Keep the
@@ -864,10 +884,14 @@ For a post-release Attendance defect, use this rollback ladder:
 - [ ] `http://127.0.0.1:8080/admin` renders the login shell.
 - [ ] `POST /web-admin/setup` issues a cookie token and the
       dashboard loads with no PCs yet.
-- [ ] **Add each PC** (ADR-0090): install the Client, enter the
-      server URL, then approve the PC in the web admin under
-      Settings → PCs → Waiting for approval, matching the code on
-      its lock screen. Alternative (ADR-0031): pre-register a row
+- [ ] **Add each PC** (ADR-0090): install and launch the Client; it
+      finds the server by itself ("Looking for the OpenPiso server…"),
+      or lists the shops it found when there are several. Then approve
+      the PC in the web admin under Settings → PCs → Waiting for
+      approval, matching the code on its lock screen. Fallback:
+      **Enter address manually** on the lock screen and type the server's
+      LAN IP (`192.168.1.10`, `192.168.1.10:3210`, or the full
+      `http://192.168.1.10:3210`). Alternative (ADR-0031): pre-register a row
       with the PC's static IP under Settings → PCs → Pre-register;
       the first boot from that IP binds the row's MAC.
 - [ ] `POST /web-admin/coin-device/test` returns

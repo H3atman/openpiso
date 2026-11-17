@@ -15,6 +15,7 @@
       return { version: 1, tiers: [{ id: 1, points: 10, seconds: 14_400 }] };
     }
     if (command === "get_wheel_enabled") return true;
+    if (command === "discover_servers") return [];
     if (command === "pause_offline_shutdown" || command === "resume_offline_shutdown") return null;
     if (command === "verify_owner_pin") {
       return args !== undefined && !Array.isArray(args) && "pin" in args && args.pin === "1234";

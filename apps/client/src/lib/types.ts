@@ -1,3 +1,9 @@
+/** An Admin that answered Server Discovery (ADR-0090 §2). */
+export interface DiscoveredServer {
+  url: string;
+  shop_name: string;
+}
+
 export interface ClientConfig {
   server_url: string;
   /**

@@ -14,6 +14,8 @@
     onSaveAndConnect: (serverUrl: string) => Promise<void> | void;
     onDisconnect: () => Promise<void> | void;
     showDisconnect?: boolean;
+    /** Distinct id when a second form is on screen (the Lock's setup surface). */
+    inputId?: string;
   }
 
   let {
@@ -23,6 +25,7 @@
     onSaveAndConnect,
     onDisconnect,
     showDisconnect = true,
+    inputId = "server-url",
   }: Props = $props();
 
   async function handleSubmit(event: SubmitEvent): Promise<void> {
@@ -33,14 +36,15 @@
 
 <form class="flex flex-col gap-4" onsubmit={handleSubmit}>
   <div class="flex flex-col gap-1.5">
-    <label for="server-url" class="text-muted-foreground text-xs font-bold tracking-wider uppercase">
-      Admin server URL
+    <label for={inputId} class="text-muted-foreground text-xs font-bold tracking-wider uppercase">
+      Admin server address
     </label>
+    <!-- Plain text: Rust accepts a bare host or host:port as well as a URL. -->
     <Input
-      id="server-url"
+      id={inputId}
       bind:value={serverUrl}
-      type="url"
-      placeholder="http://192.168.1.10:3210"
+      type="text"
+      placeholder="192.168.1.10"
       required
     />
   </div>

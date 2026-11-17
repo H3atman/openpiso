@@ -890,6 +890,32 @@ inline advisory when the absolute value exceeds 60 seconds.
 Returns one PC or `404` when the ID is unknown. Owner/web-admin only —
 the per-PC client identity surface is MAC-keyed (see below).
 
+## Server Discovery (ADR-0090 §2)
+
+UDP datagrams on port `3210`, JSON bodies, wire types in
+`crates/openpiso-core/src/discovery.rs`. Only a Client with no saved server
+URL sends a request (the `discover_servers` Client command refuses
+otherwise); the Admin answers every valid one.
+
+Request, broadcast by the Client to `255.255.255.255:3210`:
+
+```json
+{ "openpiso": "discover", "v": 1 }
+```
+
+Reply, unicast by the Admin to the request's source address and port:
+
+```json
+{ "openpiso": "admin", "v": 1, "port": 3210, "shop_name": "Juan's Pisonet" }
+```
+
+`port` is the TCP device API port; `shop_name` is the current shop name
+(same value as `GET /api/shop`). The reply carries no host: the Client builds
+the server URL as `http://<reply source IP>:<port>`. Both sides silently
+ignore any datagram that does not decode as the expected message (other
+`openpiso` tag, other `v`, `port` 0, non-JSON). A Client round collects
+replies for about 1.5 s and deduplicates them by URL.
+
 ## Client identity (ADR-0031)
 
 Identity is **server-owned**: the client sends a per-boot MAC in the

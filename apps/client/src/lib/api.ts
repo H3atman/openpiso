@@ -8,6 +8,7 @@ import type {
   AttendanceSummary,
   ClientConfig,
   CoinPromoMenu,
+  DiscoveredServer,
   PasswordChangeError,
   RedemptionTierMenu,
   PointsTransferCode,
@@ -49,6 +50,14 @@ export function getTheme(): Promise<ThemeRecord | null> {
  */
 export function isClientConfigured(): Promise<boolean> {
   return invoke<boolean>("is_client_configured");
+}
+
+/**
+ * One Server Discovery round (ADR-0090 §2): Admins that answered a LAN
+ * broadcast. Rust refuses once a server URL is saved.
+ */
+export function discoverServers(): Promise<DiscoveredServer[]> {
+  return invoke<DiscoveredServer[]>("discover_servers");
 }
 
 export function setClientConfig(

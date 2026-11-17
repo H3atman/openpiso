@@ -8,6 +8,7 @@ use tracing::warn;
 
 use crate::{
     client_connection, config_store,
+    discovery::{self, DiscoveredServer},
     state::{AppState, ClientConfig, SharedState, ThemeRecord, TimerState},
     window_mode::{self, ViewMode},
 };
@@ -202,6 +203,48 @@ pub async fn is_client_configured(state: State<'_, AppState>) -> Result<bool, St
     Ok(*state.shared.configured.read().await)
 }
 
+/// Find Admins on the LAN for first setup (ADR-0090 §2). Refused once this
+/// Client has a saved server URL, so a configured PC never follows a broadcast.
+#[tauri::command]
+pub async fn discover_servers(state: State<'_, AppState>) -> Result<Vec<DiscoveredServer>, String> {
+    discovery::discover_unless_configured(
+        &state.shared,
+        discovery::BROADCAST_TARGET,
+        discovery::DISCOVERY_WINDOW,
+    )
+    .await
+}
+
+/// Validate an owner-typed server address. Full `http`/`https` URLs are kept
+/// as typed (minus a trailing `/`); a bare `host` or `host:port` becomes
+/// `http://host:3210` / `http://host:port`.
+fn normalize_server_url(input: &str) -> Result<String, String> {
+    let input = input.trim();
+    // Detect the scheme before trimming slashes: `http://` must not become `http:`.
+    let full_url = input.contains("://");
+    let trimmed = input.trim_end_matches('/');
+    if full_url {
+        let parsed =
+            reqwest::Url::parse(trimmed).map_err(|error| format!("invalid server URL: {error}"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("server URL must use http or https".to_owned());
+        }
+        return Ok(trimmed.to_owned());
+    }
+    if trimmed.is_empty() || trimmed.contains(['/', '?', '#', '@']) {
+        return Err(format!("invalid server address: {trimmed:?}"));
+    }
+    let parsed = reqwest::Url::parse(&format!("http://{trimmed}"))
+        .map_err(|error| format!("invalid server address: {error}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("invalid server address: {trimmed:?}"))?;
+    let port = parsed
+        .port()
+        .unwrap_or(openpiso_core::discovery::DEVICE_API_PORT);
+    Ok(format!("http://{host}:{port}"))
+}
+
 #[tauri::command]
 pub async fn set_client_config(
     app: AppHandle,
@@ -209,12 +252,7 @@ pub async fn set_client_config(
     server_url: String,
     view_mode: Option<String>,
 ) -> Result<SetClientConfigResponse, String> {
-    let server_url = server_url.trim().trim_end_matches('/').to_owned();
-    let parsed_url =
-        reqwest::Url::parse(&server_url).map_err(|error| format!("invalid server URL: {error}"))?;
-    if !matches!(parsed_url.scheme(), "http" | "https") {
-        return Err("server URL must use http or https".to_owned());
-    }
+    let server_url = normalize_server_url(&server_url)?;
 
     let server_url_changed = state.shared.config.read().await.server_url != server_url;
     if server_url_changed && *state.shared.configured.read().await {
@@ -1527,6 +1565,43 @@ mod tests {
             .hash_password(pin.as_bytes(), &salt)
             .expect("hash")
             .to_string()
+    }
+
+    #[test]
+    fn server_address_accepts_bare_hosts_and_full_urls() {
+        for (input, expected) in [
+            ("192.168.1.10", "http://192.168.1.10:3210"),
+            (" 192.168.1.10:8000 ", "http://192.168.1.10:8000"),
+            ("192.168.1.10:3210/", "http://192.168.1.10:3210"),
+            ("admin-pc", "http://admin-pc:3210"),
+            ("[fe80::1]", "http://[fe80::1]:3210"),
+            ("http://192.168.1.10:3210", "http://192.168.1.10:3210"),
+            ("http://192.168.1.10:3210/", "http://192.168.1.10:3210"),
+            ("https://shop.example", "https://shop.example"),
+        ] {
+            assert_eq!(
+                normalize_server_url(input).as_deref(),
+                Ok(expected),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn server_address_rejects_junk() {
+        for input in [
+            "",
+            "   ",
+            "ftp://192.168.1.10",
+            "192.168.1.10:notaport",
+            "192.168.1.10:99999",
+            "192.168.1.10/admin",
+            "user@192.168.1.10",
+            "not a host",
+            "http://",
+        ] {
+            assert!(normalize_server_url(input).is_err(), "{input:?} accepted");
+        }
     }
 
     #[test]
