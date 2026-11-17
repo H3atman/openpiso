@@ -85,7 +85,9 @@
   };
   const currentCopy = $derived(surface.left === "session_ended" && guestSessionPaused
     ? { label: "Session ended", title: "Guest session paused", guidance: "Your Guest Time is still available on this PC." }
-    : copy[surface.left]);
+    : surface.left === "unregistered" && timer?.approval_code
+      ? { label: "Waiting for approval", title: "Waiting for owner approval", guidance: `Approve this PC in the Web Admin under Settings → PCs. Code: ${timer.approval_code}` }
+      : copy[surface.left]);
 
   async function resumeGuestSession(): Promise<void> {
     if (continuingGuestSession) return;

@@ -161,12 +161,16 @@ pub struct TimerState {
     pub active_username: Option<String>,
     pub connected: bool,
     /// One of `disconnected`, `connecting`, `connected`, `unregistered`
-    /// (ADR-0031 §2). The Lock renders a different copy for each
-    /// state: "Registering this PC…", "ask the owner to register
-    /// this PC", and the existing "Can't reach the server" — so a
-    /// machine stuck waiting for its first bind is distinguishable
-    /// from one the server explicitly rejected.
+    /// (ADR-0031 §2). The Lock renders a different copy for each state.
+    /// `unregistered` means the server answered `pc_unregistered`: the Lock
+    /// shows "Waiting for owner approval" with the Approval Code
+    /// (ADR-0090), or the older "ask the owner" copy when the server sent
+    /// no code.
     pub connection_status: String,
+    /// Server-derived Approval Code from the last `pc_unregistered`
+    /// rejection (ADR-0090). Only meaningful while `unregistered`; an older
+    /// server omits it.
+    pub approval_code: Option<String>,
     pub expired: bool,
     pub overlay_locked: bool,
     /// A durable Tamper Kill report is awaiting the authoritative heartbeat.
@@ -212,6 +216,7 @@ impl Default for TimerState {
             offline_shutdown_in_seconds: None,
             shutdown_grace_seconds: crate::shutdown::DEFAULT_GRACE_SECONDS,
             shop_status: None,
+            approval_code: None,
             error: None,
         }
     }

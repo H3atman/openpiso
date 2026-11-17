@@ -46,6 +46,7 @@ pub async fn spawn_attendance_fixture() -> AttendanceFixture {
         GuardRegistry::new(),
         crate::forwarded_log::test_forwarded_log(),
         DiagnosticRequestRegistry::new(),
+        crate::pending_pc::PendingPcRegistry::new(),
     );
     let server = tokio::spawn(async move {
         axum::serve(

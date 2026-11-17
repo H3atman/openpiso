@@ -42,6 +42,7 @@ use crate::{
         Pc, PointsRedeemInput, PointsTransferRequestCreated, RedemptionTierMenu, ShopInfo,
         ShopStatus, TamperKillAck, ThemeSettings, VoucherRedeemInput, WheelSpinResponse,
     },
+    pending_pc::PendingPcRegistry,
     sessions::{IdentityHeartbeatInput, SessionStore, TamperKillReport, TamperKillReportAge},
     shutdown,
 };
@@ -78,6 +79,9 @@ struct ServerState {
     /// Admin; the Heartbeat delivers its nonce and the Forwarded Diagnostics
     /// endpoint consumes it when the Client's slice answer arrives.
     diagnostic_requests: DiagnosticRequestRegistry,
+    /// Pending PCs (ADR-0090): unknown Clients the heartbeat remembers so the
+    /// owner can approve them from the Web Admin.
+    pending_pcs: PendingPcRegistry,
 }
 
 impl FromRef<ServerState> for AccountTokens {
@@ -98,6 +102,7 @@ pub async fn serve(
     guards: GuardRegistry,
     forwarded_log: Arc<ForwardedLogSink>,
     diagnostic_requests: DiagnosticRequestRegistry,
+    pending_pcs: PendingPcRegistry,
 ) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", 3210))
         .await
@@ -117,6 +122,7 @@ pub async fn serve(
             guards,
             forwarded_log,
             diagnostic_requests,
+            pending_pcs,
         )
         .into_make_service_with_connect_info::<SocketAddr>(),
     )
@@ -141,6 +147,7 @@ pub(crate) fn router(
         GuardRegistry::new(),
         forwarded_log,
         DiagnosticRequestRegistry::new(),
+        PendingPcRegistry::new(),
     )
 }
 
@@ -154,6 +161,7 @@ pub(crate) fn router_with_throttle(
     guards: GuardRegistry,
     forwarded_log: Arc<ForwardedLogSink>,
     diagnostic_requests: DiagnosticRequestRegistry,
+    pending_pcs: PendingPcRegistry,
 ) -> Router {
     Router::new()
         .route("/api/health", get(health))
@@ -220,6 +228,7 @@ pub(crate) fn router_with_throttle(
             account_login_throttle,
             guards,
             diagnostic_requests,
+            pending_pcs,
         })
 }
 
@@ -299,14 +308,14 @@ where
 }
 
 /// Canonical "machine is unregistered" body (ADR-0031). The client
-/// reads this exact body and maps it to the `"unregistered"` state.
-fn unregistered_rejection() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        serde_json::to_string(&json!({ "error": "pc_unregistered" }))
-            .unwrap_or_else(|_| r#"{"error":"pc_unregistered"}"#.to_owned()),
-    )
-        .into_response()
+/// reads this body and maps it to the `"unregistered"` state. The heartbeat
+/// adds the server-derived Approval Code (ADR-0090) when the Client sent a MAC.
+fn unregistered_rejection(approval_code: Option<String>) -> Response {
+    let mut body = json!({ "error": "pc_unregistered" });
+    if let Some(code) = approval_code {
+        body["approval_code"] = json!(code);
+    }
+    (StatusCode::NOT_FOUND, body.to_string()).into_response()
 }
 
 async fn account_signup(
@@ -1154,7 +1163,19 @@ async fn identity_heartbeat(
         .await?
     {
         Some(heartbeat) => heartbeat,
-        None => return Err(unregistered_rejection()),
+        None => {
+            // ADR-0090: remember the knock so the owner can approve it.
+            let approval_code = mac.as_deref().and_then(|mac| {
+                state.pending_pcs.record(
+                    mac,
+                    &peer.ip().to_string(),
+                    &input.hostname,
+                    &input.client_version,
+                    std::time::Instant::now(),
+                )
+            });
+            return Err(unregistered_rejection(approval_code));
+        }
     };
     let pc = heartbeat.pc;
     let (tamper_kill_acknowledged, tamper_kill_subject) = match heartbeat.tamper_kill_subject {
@@ -1206,7 +1227,7 @@ async fn identity_disconnect(
             .await?
         {
             Some(pc) => pc,
-            None => return Err(unregistered_rejection()),
+            None => return Err(unregistered_rejection(None)),
         };
     // End any active account session bound to this PC (the PC is going
     // offline â€” the account should not remain tied to a dead connection).
@@ -1321,7 +1342,7 @@ async fn identity_events(
     .await?
     {
         Some(pc) => pc,
-        None => return Err(unregistered_rejection()),
+        None => return Err(unregistered_rejection(None)),
     };
     let receiver = state.events.subscribe();
     let coin_receiver = state.events.subscribe_coins();
@@ -1528,6 +1549,7 @@ mod tests {
                         GuardRegistry::new(),
                         crate::forwarded_log::test_forwarded_log(),
                         DiagnosticRequestRegistry::new(),
+                        PendingPcRegistry::new(),
                     )
                     .into_make_service_with_connect_info::<SocketAddr>(),
                 )
@@ -1850,7 +1872,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("test listener should bind");
@@ -1889,7 +1913,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         // Bind pc-01 to the test MAC so the identity endpoint recognises
         // it (ADR-0031). Mirrors a real first-boot bind.
         set_pc_identity(&pool, "pc-01", None, Some(Some("aa:bb:cc:dd:ee:01")))
@@ -3073,7 +3099,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         set_pc_identity(&pool, "pc-01", None, Some(Some("aa:bb:cc:dd:ee:01")))
             .await
             .expect("pc-01 should bind to test MAC");
@@ -3120,7 +3148,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         db::simulate_coin(&pool, "pc-01", 100)
             .await
             .expect("test time should be added");
@@ -3160,7 +3190,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
 
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -3302,7 +3334,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         sqlx::query(
             "INSERT INTO coin_devices (id, name, secret, active)
              VALUES ('device-01', 'Test Coin Device', 'test-secret', 1)",
@@ -3569,7 +3603,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
 
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -3640,7 +3676,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
 
         // Insert an account with a legacy bcrypt hash (simulating import).
         let bcrypt_hash = bcrypt::hash("imported-pw", 4).expect("bcrypt hash should succeed");
@@ -3726,7 +3764,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         db::simulate_coin(&pool, "pc-01", 100)
             .await
             .expect("test Guest Time should be added");
@@ -4223,6 +4263,7 @@ mod tests {
                     guards,
                     sink,
                     diagnostic_requests,
+                    PendingPcRegistry::new(),
                 )
                 .into_make_service_with_connect_info::<SocketAddr>(),
             )
@@ -5673,7 +5714,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         // Owner pre-registers pc-01 by static IP, no MAC bound yet.
         set_pc_identity(&pool, "pc-01", Some(Some("127.0.0.1")), Some(None))
             .await
@@ -5721,7 +5764,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         // pc-01 is already bound to a MAC; no `registered_ip` set.
         set_pc_identity(&pool, "pc-01", Some(None), Some(Some("aa:bb:cc:dd:ee:01")))
             .await
@@ -5760,7 +5805,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         set_pc_identity(&pool, "pc-01", Some(Some("127.0.0.1")), Some(None))
             .await
             .expect("pc-01 should be pre-registered");
@@ -5840,7 +5887,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
 
         let (address, server) = spawn_test_server(pool).await;
 
@@ -5874,7 +5923,9 @@ mod tests {
         db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        db::seed(&pool).await.expect("test data should seed");
+        db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         // pc-01 is bound to a MAC AND has a registered IP â€” a new MAC
         // from the same IP is hardware-replacement territory and must
         // be rejected until the owner clears the binding.

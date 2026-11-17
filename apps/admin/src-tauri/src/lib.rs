@@ -28,6 +28,7 @@ mod models;
 mod monitoring;
 mod owner;
 mod pc_identity;
+mod pending_pc;
 mod reports;
 mod run_record;
 mod serial_port_detection;
@@ -272,6 +273,10 @@ pub fn run() {
             // Diagnostics endpoint consumes it, and the `:8080` owner surface
             // arms it.
             let diagnostic_requests = diagnostic_request::DiagnosticRequestRegistry::new();
+            // Pending PCs (ADR-0090): the `:3210` Heartbeat records unknown
+            // Clients and the `:8080` owner surface lists and approves them.
+            let pending_pcs = pending_pc::PendingPcRegistry::new();
+            let server_pending_pcs = pending_pcs.clone();
             let server_pool = pool.clone();
             let server_events = events.clone();
             let server_sessions = sessions.clone();
@@ -290,6 +295,7 @@ pub fn run() {
                     server_guards,
                     forwarded_log,
                     server_diagnostic_requests,
+                    server_pending_pcs,
                 )
                 .await
                 {
@@ -374,6 +380,7 @@ pub fn run() {
                 // Heartbeat delivers and the slice answer consumes
                 // (ADR-0078).
                 diagnostic_requests,
+                pending_pcs,
                 // ADR-0082: the host-diagnostics endpoint and the Support
                 // Bundle read the same Run Record store, so the owner's
                 // screen and the bundle cannot disagree.

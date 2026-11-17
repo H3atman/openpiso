@@ -46,14 +46,13 @@ boot, never persisted on the Client. It is an identity *hint*, not an auth
 secret (spoofable) — it never gates money/time/session authority. The
 **source IP** is a one-time bootstrap key used only until a MAC is bound.
 
-Resolution is **pre-registration only** — there is no auto-create. The server
-resolves identity (MAC from the `X-OpenPiso-Mac` header, source IP from the
-connection peer address — never a body-supplied IP) by: (1) MAC matches an
-existing `pcs` row → that PC; (2) no MAC match but the source IP matches an owner
-**pre-registered** row **whose `mac_address IS NULL`** → bind that row's MAC; (3)
-otherwise **reject** the report (the machine is unregistered). The owner must
-pre-register every PC by number/name + static IP before it can connect; there
-are no pending/hidden auto-created rows and no "adopt" flow.
+The server resolves identity (MAC from the `X-OpenPiso-Mac` header, source IP
+from the connection peer address — never a body-supplied IP) by: (1) MAC matches
+an existing `pcs` row → that PC; (2) no MAC match but the source IP matches an
+owner **pre-registered** row **whose `mac_address IS NULL`** → bind that row's
+MAC; (3) otherwise **reject** the report and remember the machine as a
+**Pending PC**. Device traffic never creates a `pcs` row; only the owner does,
+by pre-registering or by approving a Pending PC.
 
 The owner-authored static IP is stored as **`registered_ip`**. It is the step-2
 match key and the address used to reach that PC for a **Remote Control
@@ -63,6 +62,26 @@ from the same IP (i.e. hardware/NIC replacement) is rejected until the owner
 clears the binding (nulls `mac_address` by editing the PC in web-admin), so the
 next boot re-binds by IP. See [ADR-0031](adr/0031-client-config-persistence-and-pc-identity.md),
 [ADR-0075](adr/0075-web-admin-remote-control.md), and **PC**.
+
+### Pending PC **(decided)**
+
+A machine running the Client that has reached the Admin but is not yet a
+**PC**. It holds no time, session or balance. The owner sees it in the Web
+Admin and **approves** it, which makes it a PC; left alone, it is forgotten
+once the machine stops asking. See
+[ADR-0090](adr/0090-client-adoption-and-server-discovery.md).
+
+### Approval Code **(decided)**
+
+A short code shown both on a Pending PC's Lock and beside its entry in the Web
+Admin, so the owner can tell which physical machine an entry is. It identifies;
+it does not authenticate.
+
+### Server Discovery **(decided)**
+
+How a Client that has never been set up finds the Admin on the shop network
+without the owner typing an address. A Client that already knows its Admin
+never rediscovers.
 
 ### Guest Time **(decided)**
 

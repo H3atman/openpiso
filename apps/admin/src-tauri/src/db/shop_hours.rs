@@ -648,7 +648,7 @@ mod tests {
             .await?;
         super::super::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await?;
-        super::super::seed(&pool).await?;
+        super::super::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 

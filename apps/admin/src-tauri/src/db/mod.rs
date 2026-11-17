@@ -61,8 +61,9 @@ pub use notifications::{
     NotificationUnreadFilter,
 };
 pub use pcs::{
-    create_manual_adjustment, create_pc, disconnect_pc_by_identity, heartbeat_by_identity, pc,
-    pc_is_visible, pc_settings, pcs, remove_pc, tick_guest_pcs, update_pc_settings,
+    adopt_pending_pc, create_manual_adjustment, create_pc, disconnect_pc_by_identity,
+    heartbeat_by_identity, pc, pc_is_visible, pc_settings, pcs, remove_pc, tick_guest_pcs,
+    update_pc_settings,
 };
 #[cfg(test)]
 pub use pcs::{disconnect_pc, heartbeat_by_identity_only};
@@ -528,19 +529,6 @@ pub(crate) async fn seed(pool: &SqlitePool) -> AppResult<()> {
     .execute(&mut *transaction)
     .await?;
 
-    for (id, name) in [
-        ("pc-01", "PC 01"),
-        ("pc-02", "PC 02"),
-        ("pc-03", "PC 03"),
-        ("pc-04", "PC 04"),
-    ] {
-        sqlx::query("INSERT OR IGNORE INTO pcs (id, name) VALUES (?, ?)")
-            .bind(id)
-            .bind(name)
-            .execute(&mut *transaction)
-            .await?;
-    }
-
     sqlx::query(
         "INSERT OR IGNORE INTO rates (id, name, amount_cents, seconds, active)
          VALUES ('rate-default', '₱1 = 5 minutes', 100, 300, 1)",
@@ -564,6 +552,28 @@ pub(crate) async fn seed(pool: &SqlitePool) -> AppResult<()> {
     .await?;
 
     transaction.commit().await?;
+    Ok(())
+}
+
+/// Test fixture: production [`seed`] plus the four demo PCs (`pc-01`…`pc-04`)
+/// that fresh installs no longer get (ADR-0090: PCs arrive by approval or
+/// pre-registration). Also built for the `test-harness` feature, whose
+/// Attendance harness drives `pc-01`.
+#[cfg(any(test, feature = "test-harness"))]
+pub(crate) async fn seed_with_demo_pcs(pool: &SqlitePool) -> AppResult<()> {
+    seed(pool).await?;
+    for (id, name) in [
+        ("pc-01", "PC 01"),
+        ("pc-02", "PC 02"),
+        ("pc-03", "PC 03"),
+        ("pc-04", "PC 04"),
+    ] {
+        sqlx::query("INSERT OR IGNORE INTO pcs (id, name) VALUES (?, ?)")
+            .bind(id)
+            .bind(name)
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -624,7 +634,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await?;
         run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        seed(&pool).await?;
+        seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 

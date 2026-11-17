@@ -1706,7 +1706,9 @@ mod tests {
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path())
             .await
             .expect("test migration should run");
-        crate::db::seed(&pool).await.expect("test data should seed");
+        crate::db::seed_with_demo_pcs(&pool)
+            .await
+            .expect("test data should seed");
         pool
     }
 

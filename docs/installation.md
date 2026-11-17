@@ -83,8 +83,9 @@ bun run dev:admin
 ```
 
 In a second shell, start the client Tauri app for each rentable PC and
-point it at the admin's LAN address. The client window is per-PC; the
-default PC ID is `pc-01`.
+point it at the admin's LAN address. The server assigns the PC its id when
+the owner approves it in Settings → PCs (ADR-0090); the Client never
+chooses one.
 
 ```bash
 bun run dev:client
@@ -325,9 +326,11 @@ The admin binds:
   ports**; it is a desktop window on the server PC.
 
 The owner browser URL is `http://<server-lan-ip>:8080/admin`. The
-default seeded data installs the four demo PCs (`pc-01`…`pc-04`),
-the `₱1 = 5 minutes` rate, and the `dev-simulator` coin source so
-the kiosk works without a serial acceptor wired in.
+default seeded data installs the `₱1 = 5 minutes` rate and the
+`dev-simulator` coin source so the kiosk works without a serial
+acceptor wired in. A fresh install has no PCs: they appear when the
+owner approves a Client in Settings → PCs or pre-registers one by
+static IP (ADR-0090). Databases from earlier versions keep their rows.
 
 ### Central Terminal Autostart (ADR-0055)
 
@@ -860,20 +863,22 @@ For a post-release Attendance defect, use this rollback ladder:
 - [ ] `bun run dev:admin` starts the Tauri kiosk window.
 - [ ] `http://127.0.0.1:8080/admin` renders the login shell.
 - [ ] `POST /web-admin/setup` issues a cookie token and the
-      dashboard loads four demo PCs.
-- [ ] **Pre-register each PC** (ADR-0031): in the web admin
-      (Settings → PCs → Pre-register), add a row with the PC's
-      display name, the static IP it lives on, and leave the MAC
-      field blank. The first boot from that IP binds the row's MAC.
+      dashboard loads with no PCs yet.
+- [ ] **Add each PC** (ADR-0090): install the Client, enter the
+      server URL, then approve the PC in the web admin under
+      Settings → PCs → Waiting for approval, matching the code on
+      its lock screen. Alternative (ADR-0031): pre-register a row
+      with the PC's static IP under Settings → PCs → Pre-register;
+      the first boot from that IP binds the row's MAC.
 - [ ] `POST /web-admin/coin-device/test` returns
       `{ ok: true, simulator: true, message: "No COM port
       configured; running on the simulator source." }`.
 - [ ] `:3210/health` returns `{ status: "ok", version: … }`.
 - [ ] A client Tauri app on a different PC heartbeats against
       `<server-lan-ip>:3210` and its row turns `online` on the
-      dashboard. On the first boot the client shows "Registering
-      this PC…", then "This PC isn't registered yet" until the
-      pre-registration row exists.
+      dashboard. On the first boot the client shows "Waiting for
+      owner approval" with its Approval Code until the owner
+      approves it (or a pre-registration row binds it).
 - [ ] A subsequent reboot of the same client identifies by MAC
       and reconnects without re-binding. The client never asks the
       owner to type a PC ID — the server owns the binding.

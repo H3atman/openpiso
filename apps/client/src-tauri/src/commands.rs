@@ -1602,6 +1602,7 @@ mod tests {
                 offline_shutdown_in_seconds: None,
                 shutdown_grace_seconds: 60,
                 shop_status: None,
+                approval_code: None,
                 error: None,
             }
         }

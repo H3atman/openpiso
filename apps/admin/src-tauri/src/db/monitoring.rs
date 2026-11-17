@@ -1053,7 +1053,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await?;
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 
@@ -1470,7 +1470,7 @@ mod suppression_tests {
             .connect("sqlite::memory:")
             .await?;
         crate::db::run_migrations(&pool, crate::test_utils::migration_backup_dir().path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         Ok(pool)
     }
 
@@ -1596,7 +1596,7 @@ mod suppression_tests {
             .connect_with(options.clone())
             .await?;
         crate::db::run_migrations(&pool, directory.path()).await?;
-        crate::db::seed(&pool).await?;
+        crate::db::seed_with_demo_pcs(&pool).await?;
         let now = at(5_000);
         set_suppression_with_audit(&pool, "pc-01", "PC 01", 45, now).await?;
         pool.close().await;

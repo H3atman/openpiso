@@ -772,10 +772,12 @@ Migration `0010_pc_identity.sql` adds two nullable columns to `pcs`:
   Control target after canonical private-IPv4 and configured-CIDR validation.
   Device traffic cannot change it; the owner edits it through Web Admin.
 
-Both are nullable. Existing seeded PCs ship with `NULL` on both
-columns and are re-bindable by the owner pre-registering a static IP
-on the PC edit page (or by leaving NULL and pre-registering fresh
-rows). Each column gets a `UNIQUE` partial index `WHERE … IS NOT
+Both are nullable. Fresh installs seed no PCs (ADR-0090): rows come
+from owner approval of a Pending PC (MAC and observed IP set) or from
+pre-registration (static IP set, MAC `NULL` until first boot). The
+demo PCs `pc-01`…`pc-04` that earlier versions seeded keep `NULL` on
+both columns and stay re-bindable by the owner pre-registering a
+static IP on the PC edit page. Each column gets a `UNIQUE` partial index `WHERE … IS NOT
 NULL` so two rows cannot both claim the same MAC or registered IP,
 while a normal `COUNT(*)` scan is still index-friendly. SQLite
 forbids partial `UNIQUE` indexes; the partial index is the documented
