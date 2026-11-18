@@ -1,16 +1,26 @@
 # Development
 
-Install and check all workspaces from the repository root:
+Install, then run every automated check from the repository root before
+finishing a change. CI's `check` job runs the same command:
 
 ```bash
 bun install
-bun run build:web-admin
-bun run check
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+bun run verify
 bun run check:windows   # on Linux/macOS; skip on Windows
 ```
+
+`verify` stops at the first failure, in this order: `cargo fmt --check`,
+`bun run check` (all workspaces, including Web Admin's Vitest suite),
+`bun test` (every other `*.test.ts`), the Web Admin build, workspace clippy,
+and `cargo test --workspace`. Run `cargo fmt --all` to fix formatting.
+Clippy denies `unwrap()`/`expect()` outside tests (`clippy.toml`); test-only
+helper modules opt out with a scoped `#![allow]`.
+
+The Web Admin build runs before clippy because the Admin's Tauri build script
+requires `apps/web-admin/dist` (a bundle resource). The Client's build script
+likewise requires `target/release/client-guard.exe`; on Linux, where the real
+Guard cannot be built, an empty file stands in (CI creates one):
+`mkdir -p target/release && touch target/release/client-guard.exe`.
 
 Client real-command tests (`cargo test -p openpiso-client --lib real_command_tests`)
 build a windowless real Tauri app and run on Windows and Linux. Linux needs a

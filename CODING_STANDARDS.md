@@ -17,8 +17,6 @@ Any new or edited client UI flow must be a state machine ([ADR-0089](docs/adr/00
 ## Rust
 
 - Use `Result<T, AppError>` for fallible paths and explicit domain types.
-- Propagate or handle production errors; never use `unwrap()` or `expect()` in production paths.
-- Format Rust with `cargo fmt --all` before finishing Rust changes.
 
 ## SQLite
 

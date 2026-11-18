@@ -38,6 +38,8 @@
 //! exit codes, persistence, and requests at the test Admin.
 
 #![cfg(windows)]
+// Integration-test harness: helpers outside #[test] fns treat panics as failures.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{
     io::Read,

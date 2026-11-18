@@ -112,7 +112,10 @@ impl FakeAutostart {
     /// Directly set the enabled state for test setup without going through
     /// the port interface.
     pub fn set_enabled_for_test(&self, enabled: bool) {
-        *self.enabled.lock().unwrap() = enabled;
+        *self
+            .enabled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = enabled;
     }
 
     /// When `true`, `set_enabled` returns an error and does not change the
@@ -125,7 +128,10 @@ impl FakeAutostart {
 
 impl AutostartPort for FakeAutostart {
     fn is_enabled(&self) -> bool {
-        *self.enabled.lock().unwrap()
+        *self
+            .enabled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn set_enabled(&self, enabled: bool) -> Result<(), AppError> {
@@ -134,7 +140,10 @@ impl AutostartPort for FakeAutostart {
                 "simulated autostart write failure".to_owned(),
             ));
         }
-        *self.enabled.lock().unwrap() = enabled;
+        *self
+            .enabled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = enabled;
         Ok(())
     }
 
