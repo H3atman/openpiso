@@ -1,3 +1,6 @@
+// Test-harness feature only, never shipped: panics are harness failures.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::net::SocketAddr;
 
 use chrono::{Datelike, Offset, TimeZone};

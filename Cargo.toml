@@ -10,6 +10,11 @@ resolver = "2"
 [profile.dev]
 debug = 1
 
+# Production code must propagate or handle errors; tests may unwrap (see clippy.toml).
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
 [workspace.package]
 edition = "2021"
 version = "0.12.8"

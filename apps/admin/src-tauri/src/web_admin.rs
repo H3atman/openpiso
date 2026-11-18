@@ -9173,9 +9173,10 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_install_requires_offered_version_and_schema_acknowledgement() {
+        let (_, newer) = update_fixture_versions();
         let mut state = test_state().await;
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-            std::sync::Mutex::new(Ok(vec![update_release("0.13.0", 60)])),
+            std::sync::Mutex::new(Ok(vec![update_release(&newer, 60)])),
         ));
         let address = spawn(state.clone()).await;
         let client = reqwest::Client::new();
@@ -9189,8 +9190,8 @@ mod tests {
             .error_for_status()
             .expect("checked");
         for input in [
-            serde_json::json!({ "version": "0.13.0" }),
-            serde_json::json!({ "version": "0.13.0", "acknowledgeSchemaChange": false }),
+            serde_json::json!({ "version": newer }),
+            serde_json::json!({ "version": newer, "acknowledgeSchemaChange": false }),
             serde_json::json!({ "version": "0.12.0", "acknowledgeSchemaChange": true }),
         ] {
             let response = client
@@ -9206,7 +9207,7 @@ mod tests {
             .post(format!("http://{address}/web-admin/update/install"))
             .owner(&auth)
             .json(&serde_json::json!({
-                "version": "0.13.0", "acknowledgeSchemaChange": true,
+                "version": newer, "acknowledgeSchemaChange": true,
             }))
             .send()
             .await
@@ -9220,7 +9221,7 @@ mod tests {
         .expect("restart marker");
         let marker: serde_json::Value = serde_json::from_str(&marker).expect("marker JSON");
         assert_eq!(marker["fromVersion"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(marker["targetVersion"], "0.13.0");
+        assert_eq!(marker["targetVersion"], newer);
         assert!(marker["startedAt"].is_string());
         let audits: Vec<String> = sqlx::query_scalar("SELECT outcome FROM audit_log WHERE event_type = 'app_update_install' ORDER BY outcome")
             .fetch_all(&state.pool).await.expect("install audits");
@@ -9234,7 +9235,7 @@ mod tests {
             std::sync::Mutex::new(Ok(vec![
                 update_release("0.11.4", 59),
                 update_release("0.11.3", 57),
-                update_release("0.12.0", 59),
+                update_release(env!("CARGO_PKG_VERSION"), 59),
             ])),
         ));
         let address = spawn(state.clone()).await;
@@ -9251,7 +9252,7 @@ mod tests {
         for (version, confirm) in [
             ("0.11.4", "v0.11.4"),
             ("0.11.3", "0.11.3"),
-            ("0.12.0", "0.12.0"),
+            (env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_VERSION")),
             ("0.1.0", "0.1.0"),
         ] {
             let response = client
@@ -9285,7 +9286,8 @@ mod tests {
 
     #[tokio::test]
     async fn app_update_restart_result_survives_until_ack_and_records_host_diagnostics() {
-        for (target, ok) in [(env!("CARGO_PKG_VERSION"), true), ("0.13.0", false)] {
+        let (_, newer) = update_fixture_versions();
+        for (target, ok) in [(env!("CARGO_PKG_VERSION"), true), (newer.as_str(), false)] {
             let dir = tempfile::tempdir().expect("data directory");
             let state = test_state_in(dir.path()).await;
             let marker = serde_json::json!({
@@ -9787,11 +9789,15 @@ mod tests {
             .expect("feed listener");
         let base = format!("http://{}", listener.local_addr().expect("feed address"));
         let list_base = base.clone();
+        let (_, newer) = update_fixture_versions();
+        let list_newer = newer.clone();
+        let newer_tag = format!("v{newer}");
         let fixture = Router::new()
             .route(&format!("/repos/{RELEASE_REPOSITORY}/releases"), get(move |
                 Query(query): Query<std::collections::HashMap<String, String>>, headers: HeaderMap,
             | {
                 let base = list_base.clone();
+                let newer = list_newer.clone();
                 async move {
                     assert!(!headers.contains_key(header::AUTHORIZATION));
                     assert!(!headers.contains_key(header::COOKIE));
@@ -9806,27 +9812,27 @@ mod tests {
                         ],
                     });
                     let releases = if query["page"] == "1" {
-                        let mut releases = vec![listing("0.12.0")];
+                        let mut releases = vec![listing(env!("CARGO_PKG_VERSION"))];
                         releases.extend((0..99).map(|_| serde_json::json!({
                             "tag_name": "v1.0.0", "draft": true, "prerelease": false, "assets": [],
                         })));
                         releases
                     } else {
-                        vec![listing("0.13.0"), listing("0.11.4"), serde_json::json!({
+                        vec![listing(&newer), listing("0.11.4"), serde_json::json!({
                             "tag_name": "v2.0.0", "draft": false, "prerelease": true, "assets": [],
                         }), listing("9.0.0-beta.1")]
                     };
                     Json(releases)
                 }
             }))
-            .route("/{tag}/release.json", get(|Path(tag): Path<String>| async move {
+            .route("/{tag}/release.json", get(move |Path(tag): Path<String>| { let newer_tag = newer_tag.clone(); async move {
                 Json(serde_json::json!({
                     "version": tag.trim_start_matches('v'),
-                    "schema_version": if tag == "v0.13.0" { 60 } else { 59 },
+                    "schema_version": if tag == newer_tag { 60 } else { 59 },
                     "notes": "Owner-facing release notes",
                     "pub_date": "2026-10-13T00:00:00Z",
                 }))
-            }));
+            }}));
         let fixture_task = tokio::spawn(async move {
             axum::serve(listener, fixture).await.expect("fixture");
         });
@@ -9845,11 +9851,11 @@ mod tests {
             .expect("check");
         assert_eq!(response.status(), StatusCode::OK);
         let body: serde_json::Value = response.json().await.expect("state JSON");
-        assert_eq!(body["available"]["version"], "0.13.0", "{body}");
+        assert_eq!(body["available"]["version"], newer, "{body}");
         assert_eq!(body["available"]["notes"], "Owner-facing release notes");
         assert_eq!(
             body["available"]["latestJsonUrl"],
-            format!("{base}/v0.13.0/latest.json")
+            format!("{base}/v{newer}/latest.json")
         );
         assert_eq!(body["rollbacks"][0]["version"], "0.11.4");
         fixture_task.abort();

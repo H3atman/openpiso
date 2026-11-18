@@ -1,3 +1,6 @@
+// Test-only helpers (compiled for tests and the test-harness feature): panics are failures.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Shared test utilities for the admin crate.
 ///
 /// Provides file-backed WAL test pool used by both repository-level

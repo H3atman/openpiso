@@ -56,3 +56,6 @@ windows = { version = "0.61", features = [
   "Win32_UI_Shell",
   "Win32_System_Threading",
 ] }
+
+[lints]
+workspace = true
