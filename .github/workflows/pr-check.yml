@@ -45,11 +45,6 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      # The Client's Tauri build script requires its bundle resource to exist;
-      # the real Guard is Windows-only, so Linux checks use an empty stand-in.
-      - name: Stand in for the Windows Client Guard resource
-        run: mkdir -p target/release && touch target/release/client-guard.exe
-
       # Same single command as local development (docs/development.md).
       # Windows-only Guard adapters still need separate Windows verification.
       - name: Verify

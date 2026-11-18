@@ -7,10 +7,7 @@ Tauri v2 prerequisites. Keep changes small, typed, local-first, and in scope.
 Before a PR, run relevant focused tests and checks; cross-cutting changes need:
 
 ```bash
-bun run check
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+bun run verify        # every automated check; CI runs the same command
 bun run check:windows # non-Windows hosts with cargo-xwin
 ```
 
