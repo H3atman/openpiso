@@ -1,8 +1,11 @@
 use openpiso_core::attendance_wire::{AttendanceClaimResponse, AttendanceMonth, AttendanceSummary};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::{AppState, SharedState};
+use crate::{
+    account_request::{self, AccountRequestError},
+    state::{AppState, SharedState},
+};
 
 #[derive(Debug, Serialize)]
 struct AttendanceClaimRequest {
@@ -52,19 +55,6 @@ fn is_canonical_uuid(value: &str) -> bool {
         })
 }
 
-fn attendance_url(server_url: &str, path_segments: &[&str]) -> Result<reqwest::Url, String> {
-    let mut url =
-        reqwest::Url::parse(server_url).map_err(|_| "could not reach admin server".to_owned())?;
-    let mut path = url
-        .path_segments_mut()
-        .map_err(|_| "could not reach admin server".to_owned())?;
-    path.pop_if_empty();
-    path.extend(["api", "attendance"]);
-    path.extend(path_segments.iter().copied());
-    drop(path);
-    Ok(url)
-}
-
 impl AttendanceClaimError {
     fn new(error: &str, message: impl Into<String>, status_code: Option<u16>) -> Self {
         Self {
@@ -87,10 +77,39 @@ fn claim_denial_message(reason: Option<&str>) -> &'static str {
     }
 }
 
-async fn attendance_error(response: reqwest::Response, operation: &str) -> AttendanceClaimError {
-    let status = response.status();
+/// Daily Reward copy for a failed Account Session request. `operation` names
+/// the request in the local log.
+fn attendance_request_error(error: AccountRequestError, operation: &str) -> AttendanceClaimError {
+    match error {
+        AccountRequestError::NotLoggedIn => {
+            AttendanceClaimError::new("unauthorized", "Log in to view Daily Reward.", None)
+        }
+        AccountRequestError::Unreachable => {
+            AttendanceClaimError::new("transport", "could not reach admin server", None)
+        }
+        AccountRequestError::Rejected { status, body } => {
+            attendance_error(status, &body, operation)
+        }
+        AccountRequestError::Undecodable => AttendanceClaimError::new(
+            "invalid_response",
+            "Daily Reward is unavailable right now.",
+            None,
+        ),
+        // Daily Reward patches the session itself (`apply_claim_response`)
+        // and never asks the module to replace it, so this does not occur.
+        AccountRequestError::SessionChanged => {
+            AttendanceClaimError::new("session_changed", crate::commands::SESSION_CHANGED, None)
+        }
+    }
+}
+
+fn attendance_error(
+    status: reqwest::StatusCode,
+    body: &str,
+    operation: &str,
+) -> AttendanceClaimError {
     let status_code = Some(status.as_u16());
-    let body = response.json::<AttendanceApiError>().await.ok();
+    let body = serde_json::from_str::<AttendanceApiError>(body).ok();
 
     if status == reqwest::StatusCode::CONFLICT
         && body.as_ref().and_then(|error| error.error.as_deref()) == Some("attendance_claim_denied")
@@ -138,64 +157,13 @@ async fn attendance_error(response: reqwest::Response, operation: &str) -> Atten
     }
 }
 
-async fn attendance_json<T: DeserializeOwned>(
-    shared: &SharedState,
-    method: reqwest::Method,
-    path_segments: &[&str],
-    body: Option<&AttendanceClaimRequest>,
-    operation: &str,
-) -> Result<(T, String), AttendanceClaimError> {
-    let auth = shared.account_auth.read().await.clone().ok_or_else(|| {
-        AttendanceClaimError::new("unauthorized", "Log in to view Daily Reward.", None)
-    })?;
-    let config = shared.config.read().await.clone();
-    let endpoint = attendance_url(&config.server_url, path_segments)
-        .map_err(|message| AttendanceClaimError::new("transport", message, None))?;
-    let mut request = reqwest::Client::new()
-        .request(method, endpoint)
-        .bearer_auth(&auth.token);
-    if let Some(body) = body {
-        request = request.json(body);
-    }
-    let response = request.send().await.map_err(|error| {
-        tracing::error!(
-            target: "openpiso_client::attendance",
-            operation,
-            "could not reach admin server: {error:?}"
-        );
-        AttendanceClaimError::new("transport", "could not reach admin server", None)
-    })?;
-    if !response.status().is_success() {
-        return Err(attendance_error(response, operation).await);
-    }
-    let result = response.json::<T>().await.map_err(|error| {
-        tracing::error!(
-            target: "openpiso_client::attendance",
-            operation,
-            "Admin returned an invalid Daily Reward response: {error:?}"
-        );
-        AttendanceClaimError::new(
-            "invalid_response",
-            "Daily Reward is unavailable right now.",
-            None,
-        )
-    })?;
-    Ok((result, auth.token))
-}
-
 #[tauri::command]
 pub async fn get_attendance_summary(
     state: State<'_, AppState>,
 ) -> Result<AttendanceSummary, String> {
-    let (summary, _) = attendance_json(
-        &state.shared,
-        reqwest::Method::GET,
-        &[],
-        None,
-        "summary read",
-    )
-    .await
-    .map_err(|error| error.message)?;
+    let (summary, _) = account_request::get(&state.shared, &["attendance"], "summary read")
+        .await
+        .map_err(|error| attendance_request_error(error, "summary read").message)?;
     Ok(summary)
 }
 
@@ -207,15 +175,13 @@ pub async fn get_attendance_month(
     if !is_canonical_month(&earning_month) {
         return Err(INVALID_ATTENDANCE_REQUEST.to_owned());
     }
-    let (month, _) = attendance_json(
+    let (month, _) = account_request::get(
         &state.shared,
-        reqwest::Method::GET,
-        &["months", &earning_month],
-        None,
+        &["attendance", "months", &earning_month],
         "month read",
     )
     .await
-    .map_err(|error| error.message)?;
+    .map_err(|error| attendance_request_error(error, "month read").message)?;
     Ok(month)
 }
 
@@ -236,14 +202,14 @@ pub async fn claim_attendance(
         request_id,
         earning_month,
     };
-    let (claim, token) = attendance_json(
+    let (claim, token) = account_request::post(
         &state.shared,
-        reqwest::Method::POST,
-        &["claims"],
+        &["attendance", "claims"],
         Some(&request),
         "claim",
     )
-    .await?;
+    .await
+    .map_err(|error| attendance_request_error(error, "claim"))?;
     apply_claim_response(&state.shared, &token, &claim).await;
     Ok(claim)
 }
@@ -456,7 +422,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attendance_json_against_real_admin_summary_month_claim_and_retry() {
+    async fn attendance_requests_against_real_admin_summary_month_claim_and_retry() {
         use openpiso_admin_lib::attendance_harness::spawn_attendance_fixture;
 
         let admin = spawn_attendance_fixture().await;
@@ -464,7 +430,7 @@ mod tests {
         let [recent, older] = admin.earning_months.clone();
 
         let (summary, token): (AttendanceSummary, _) =
-            attendance_json(&shared, reqwest::Method::GET, &[], None, "summary read")
+            account_request::get(&shared, &["attendance"], "summary read")
                 .await
                 .expect("summary through real Admin");
         assert_eq!(token, admin.token);
@@ -484,15 +450,10 @@ mod tests {
             assert_eq!(listed.check_in_count, 1);
         }
 
-        let (month, _): (AttendanceMonth, _) = attendance_json(
-            &shared,
-            reqwest::Method::GET,
-            &["months", &recent],
-            None,
-            "month read",
-        )
-        .await
-        .expect("month through real Admin (flattened summary)");
+        let (month, _): (AttendanceMonth, _) =
+            account_request::get(&shared, &["attendance", "months", &recent], "month read")
+                .await
+                .expect("month through real Admin (flattened summary)");
         assert_eq!(month.summary.earning_month, recent);
         assert_eq!(month.summary.claimable_seconds, 120);
         assert_eq!(month.summary.state, Some(EarningMonthState::Claimable));
@@ -507,10 +468,9 @@ mod tests {
             earning_month: recent.clone(),
         };
         let claim = || async {
-            attendance_json::<AttendanceClaimResponse>(
+            account_request::post::<AttendanceClaimResponse, _>(
                 &shared,
-                reqwest::Method::POST,
-                &["claims"],
+                &["attendance", "claims"],
                 Some(&request),
                 "claim",
             )
@@ -534,20 +494,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attendance_json_maps_real_admin_unauthorized_for_invalid_bearer() {
+    async fn attendance_requests_map_real_admin_unauthorized_for_invalid_bearer() {
         use openpiso_admin_lib::attendance_harness::spawn_attendance_fixture;
 
         let admin = spawn_attendance_fixture().await;
         let shared = shared_for(&admin.server_url, "not-a-real-token").await;
-        let error = attendance_json::<AttendanceSummary>(
-            &shared,
-            reqwest::Method::GET,
-            &[],
-            None,
-            "summary read",
-        )
-        .await
-        .expect_err("invalid bearer must be refused");
+        let error =
+            account_request::get::<AttendanceSummary>(&shared, &["attendance"], "summary read")
+                .await
+                .map_err(|error| attendance_request_error(error, "summary read"))
+                .expect_err("invalid bearer must be refused");
         assert_eq!(error.error, "unauthorized");
         assert_eq!(error.status_code, Some(401));
     }

@@ -60,7 +60,8 @@ fn transport_error(operation: &str, error: &reqwest::Error) -> String {
 const LOG_IN_TO_CONTINUE: &str = "log in to continue";
 
 /// Customer copy when the Account Session changed while a request was in flight.
-const SESSION_CHANGED: &str = "Your session changed before this finished. Check your balance.";
+pub(crate) const SESSION_CHANGED: &str =
+    "Your session changed before this finished. Check your balance.";
 
 /// Customer copy for a failed Account Session request. A rejection shows the
 /// Admin's body text, or `rejected_fallback` when the body is empty.
@@ -577,7 +578,24 @@ pub async fn get_account_auth(
 
 #[tauri::command]
 pub async fn claim_guest_time(state: State<'_, AppState>) -> Result<AccountAuthState, String> {
-    mutate_account_session(&state.shared, "claim").await
+    let message = |error| {
+        account_request_message(
+            error,
+            "account session request failed",
+            "invalid account response",
+        )
+    };
+    let (auth, sent_with) = account_request::post::<AccountAuthState, _>(
+        &state.shared,
+        &["accounts", "claim"],
+        account_request::NO_BODY,
+        "account claim",
+    )
+    .await
+    .map_err(message)?;
+    account_request::replace_session(&state.shared, &sent_with, auth)
+        .await
+        .map_err(message)
 }
 
 #[tauri::command]
@@ -627,34 +645,16 @@ pub async fn get_redemption_tiers(
 
 #[tauri::command]
 pub async fn get_coin_promo_menu(state: State<'_, AppState>) -> Result<CoinPromoMenu, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
+    account_request::get(&state.shared, &["coin-promo"], "Coin Promo menu")
         .await
-        .clone()
-        .ok_or_else(|| "log in before viewing the Coin Promo".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!("{}/api/coin-promo", config.server_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
-        .get(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .send()
-        .await
-        .map_err(|error| transport_error("Coin Promo menu", &error))?;
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Coin Promo ladder failed".to_owned()));
-    }
-    response
-        .json::<CoinPromoMenu>()
-        .await
-        .map_err(|error| format!("invalid Coin Promo ladder: {error}"))
+        .map(|(menu, _)| menu)
+        .map_err(|error| {
+            account_request_message(
+                error,
+                "Coin Promo ladder failed",
+                "invalid Coin Promo ladder",
+            )
+        })
 }
 
 #[tauri::command]
@@ -663,29 +663,24 @@ pub async fn redeem_points(
     tier_id: i64,
     version: i64,
 ) -> Result<AccountAuthState, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "log in before redeeming points".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/points/redeem",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
+    let message = |error| {
+        account_request_message(
+            error,
+            "points redemption failed",
+            "invalid account response",
         )
-        .json(&PointsRedeemRequest { tier_id, version })
-        .send()
+    };
+    let (auth, sent_with) = account_request::post::<AccountAuthState, _>(
+        &state.shared,
+        &["points", "redeem"],
+        Some(&PointsRedeemRequest { tier_id, version }),
+        "points redemption",
+    )
+    .await
+    .map_err(message)?;
+    account_request::replace_session(&state.shared, &sent_with, auth)
         .await
-        .map_err(|error| transport_error("points redemption", &error))?;
-    store_account_response(&state.shared, response, "points redemption failed").await
+        .map_err(message)
 }
 
 #[tauri::command]
@@ -693,44 +688,27 @@ pub async fn spin_wheel(
     state: State<'_, AppState>,
     password: Option<String>,
 ) -> Result<WheelSpinResult, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "log in before spinning the wheel".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!("{}/api/wheel/spin", config.server_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .json(&WheelSpinRequest { password })
-        .send()
-        .await
-        .map_err(|error| transport_error("wheel spin", &error))?;
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| "wheel spin failed".to_owned()));
-    }
-    let spin = response
-        .json::<WheelSpinResponse>()
-        .await
-        .map_err(|error| format!("invalid wheel response: {error}"))?;
-    set_account_auth(
+    let message =
+        |error| account_request_message(error, "wheel spin failed", "invalid wheel response");
+    let (spin, sent_with) = account_request::post::<WheelSpinResponse, _>(
         &state.shared,
+        &["wheel", "spin"],
+        Some(&WheelSpinRequest { password }),
+        "wheel spin",
+    )
+    .await
+    .map_err(message)?;
+    account_request::replace_session(
+        &state.shared,
+        &sent_with,
         AccountAuthState {
             token: spin.token,
             account: spin.account,
             session: spin.session,
         },
     )
-    .await;
+    .await
+    .map_err(message)?;
     Ok(spin.result)
 }
 
@@ -755,80 +733,47 @@ pub async fn get_wheel_enabled(state: State<'_, AppState>) -> Result<bool, Strin
 
 #[tauri::command]
 pub async fn get_wheel_settings(state: State<'_, AppState>) -> Result<WheelSettings, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
+    account_request::get(&state.shared, &["wheel", "settings"], "wheel settings")
         .await
-        .clone()
-        .ok_or_else(|| "log in before viewing wheel settings".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/wheel/settings",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .get(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .send()
-        .await
-        .map_err(|error| transport_error("wheel settings", &error))?;
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| "wheel settings failed".to_owned()));
-    }
-    response
-        .json::<WheelSettings>()
-        .await
-        .map_err(|error| format!("invalid wheel settings: {error}"))
+        .map(|(settings, _)| settings)
+        .map_err(|error| {
+            account_request_message(error, "wheel settings failed", "invalid wheel settings")
+        })
 }
 
 #[tauri::command]
 pub async fn logout_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "no account is logged in".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/accounts/logout",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .send()
-        .await
-        .map_err(|error| transport_error("account logout", &error))?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        // Session already ended server-side (tick expired it, or it was
-        // never bound). Clear local auth so the UI can recover; the guest
-        // timer will update on the next heartbeat.
-        clear_account_auth(&state.shared).await;
-        return Ok(());
-    }
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| "logout failed".to_owned()));
-    }
+    let body = match account_request::post_raw(
+        &state.shared,
+        &["accounts", "logout"],
+        account_request::NO_BODY,
+        "account logout",
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(AccountRequestError::Rejected { status, .. })
+            if status == reqwest::StatusCode::UNAUTHORIZED =>
+        {
+            // Session already ended server-side (tick expired it, or it was
+            // never bound). Clear local auth so the UI can recover; the guest
+            // timer will update on the next heartbeat.
+            clear_account_auth(&state.shared).await;
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(account_request_message(
+                error,
+                "logout failed",
+                "logout failed",
+            ))
+        }
+    };
     clear_account_auth(&state.shared).await;
     // Parse the server response body (Pc) and update the local timer
     // so the frontend immediately sees the guest timer state instead of
     // stale session-enriched values (Bug #6).
-    match response.json::<client_connection::PcResponse>().await {
+    match serde_json::from_slice::<client_connection::PcResponse>(&body) {
         Ok(pc) => client_connection::apply_server_state(&state.shared, &app, pc).await,
         Err(error) => {
             tracing::warn!(
@@ -1125,32 +1070,22 @@ pub async fn transfer_time(
     to_username: String,
     seconds: i64,
 ) -> Result<AccountAuthState, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "log in before transferring time".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/accounts/transfer",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .json(&TransferTimeRequest {
+    let message =
+        |error| account_request_message(error, "time transfer failed", "invalid account response");
+    let (auth, sent_with) = account_request::post::<AccountAuthState, _>(
+        &state.shared,
+        &["accounts", "transfer"],
+        Some(&TransferTimeRequest {
             to_username: &to_username,
             seconds,
-        })
-        .send()
+        }),
+        "time transfer",
+    )
+    .await
+    .map_err(message)?;
+    account_request::replace_session(&state.shared, &sent_with, auth)
         .await
-        .map_err(|error| transport_error("time transfer", &error))?;
-    store_account_response(&state.shared, response, "time transfer failed").await
+        .map_err(message)
 }
 
 /// Owner-confirmed **Points Transfer Request** (ADR-0030). Creates a pending
@@ -1162,41 +1097,24 @@ pub async fn request_points_transfer(
     to_username: String,
     points_centi: i64,
 ) -> Result<PointsTransferCodeResponse, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "log in before transferring points".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/accounts/transfer-points",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .json(&TransferPointsRequest {
+    account_request::post(
+        &state.shared,
+        &["accounts", "transfer-points"],
+        Some(&TransferPointsRequest {
             to_username: &to_username,
             points_centi,
-        })
-        .send()
-        .await
-        .map_err(|error| transport_error("points transfer", &error))?;
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| "points transfer request failed".to_owned()));
-    }
-    response
-        .json::<PointsTransferCodeResponse>()
-        .await
-        .map_err(|error| format!("invalid points transfer response: {error}"))
+        }),
+        "points transfer",
+    )
+    .await
+    .map(|(code, _)| code)
+    .map_err(|error| {
+        account_request_message(
+            error,
+            "points transfer request failed",
+            "invalid points transfer response",
+        )
+    })
 }
 
 /// Password Change outcome variants — no customer-facing English here.
@@ -1230,40 +1148,21 @@ pub async fn change_account_password(
     old_password: String,
     new_password: String,
 ) -> Result<(), PasswordChangeError> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or(PasswordChangeError::Other)?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/accounts/change-password",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .json(&ChangePasswordRequest {
+    account_request::post_raw(
+        &state.shared,
+        &["accounts", "change-password"],
+        Some(&ChangePasswordRequest {
             old_password: &old_password,
             new_password: &new_password,
-        })
-        .send()
-        .await
-        .map_err(|_error| PasswordChangeError::Other)?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let message = response
-            .text()
-            .await
-            .map_err(|_error| PasswordChangeError::Other)?;
-        return Err(change_password_error(status, message));
-    }
-    Ok(())
+        }),
+        "password change",
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| match error {
+        AccountRequestError::Rejected { status, body } => change_password_error(status, body),
+        _ => PasswordChangeError::Other,
+    })
 }
 
 async fn disconnect_shared(shared: &SharedState) -> Result<(), String> {
@@ -1431,63 +1330,6 @@ async fn authenticate_account(
             .map_err(|error| AccountLoginError::Message {
                 message: format!("invalid account response: {error}"),
             })?;
-    set_account_auth(shared, auth.clone()).await;
-    Ok(auth)
-}
-
-async fn mutate_account_session(
-    shared: &Arc<SharedState>,
-    action: &str,
-) -> Result<AccountAuthState, String> {
-    let auth = shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "no account is logged in".to_owned())?;
-    let config = shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/accounts/{action}",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
-        )
-        .send()
-        .await
-        .map_err(|error| transport_error(&format!("account {action}"), &error))?;
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| "account session request failed".to_owned()));
-    }
-    let auth = response
-        .json::<AccountAuthState>()
-        .await
-        .map_err(|error| format!("invalid account response: {error}"))?;
-    set_account_auth(shared, auth.clone()).await;
-    Ok(auth)
-}
-
-async fn store_account_response(
-    shared: &Arc<SharedState>,
-    response: reqwest::Response,
-    fallback: &str,
-) -> Result<AccountAuthState, String> {
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| fallback.to_owned()));
-    }
-    let auth = response
-        .json::<AccountAuthState>()
-        .await
-        .map_err(|error| format!("invalid account response: {error}"))?;
     set_account_auth(shared, auth.clone()).await;
     Ok(auth)
 }

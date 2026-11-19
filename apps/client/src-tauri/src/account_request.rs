@@ -21,6 +21,9 @@ pub(crate) enum AccountRequestError {
 
 const LOG_TARGET: &str = "openpiso_client::account_request";
 
+/// The `body` of a body-less [`post`] or [`post_raw`].
+pub(crate) const NO_BODY: Option<&()> = None;
+
 /// `GET /api/<segments…>` with the stored Account Session. Returns the
 /// decoded answer and the token the request was sent with, which callers
 /// pass to [`replace_session`] or use to guard their own patch.
@@ -30,25 +33,38 @@ pub(crate) async fn get<T: DeserializeOwned>(
     segments: &[&str],
     operation: &str,
 ) -> Result<(T, String), AccountRequestError> {
-    send(
-        shared,
-        reqwest::Method::GET,
-        segments,
-        None::<&()>,
-        operation,
-    )
-    .await
+    let (response, token) =
+        send(shared, reqwest::Method::GET, segments, NO_BODY, operation).await?;
+    Ok((decode(response, operation).await?, token))
 }
 
 /// `POST /api/<segments…>` with the stored Account Session and an optional
-/// JSON body; a body-less POST passes `None::<&()>`. Same answer as [`get`].
+/// JSON body; a body-less POST passes [`NO_BODY`]. Same answer as [`get`].
 pub(crate) async fn post<T: DeserializeOwned, B: Serialize>(
     shared: &SharedState,
     segments: &[&str],
     body: Option<&B>,
     operation: &str,
 ) -> Result<(T, String), AccountRequestError> {
-    send(shared, reqwest::Method::POST, segments, body, operation).await
+    let (response, token) = send(shared, reqwest::Method::POST, segments, body, operation).await?;
+    Ok((decode(response, operation).await?, token))
+}
+
+/// Like [`post`], but the success body comes back as raw bytes, undecoded,
+/// for callers that ignore it or tolerate a body they cannot parse. A body
+/// that cannot be read comes back empty.
+pub(crate) async fn post_raw<B: Serialize>(
+    shared: &SharedState,
+    segments: &[&str],
+    body: Option<&B>,
+    operation: &str,
+) -> Result<Vec<u8>, AccountRequestError> {
+    let (response, _) = send(shared, reqwest::Method::POST, segments, body, operation).await?;
+    Ok(response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .unwrap_or_default())
 }
 
 /// Store `auth` as the Account Session, but only if the stored session still
@@ -71,13 +87,15 @@ pub(crate) async fn replace_session(
     Ok(auth)
 }
 
-async fn send<T: DeserializeOwned, B: Serialize>(
+/// Send the request and hand back the successful response with the token it
+/// went out with; everything up to the status check.
+async fn send<B: Serialize>(
     shared: &SharedState,
     method: reqwest::Method,
     segments: &[&str],
     body: Option<&B>,
     operation: &str,
-) -> Result<(T, String), AccountRequestError> {
+) -> Result<(reqwest::Response, String), AccountRequestError> {
     let token = shared
         .account_auth
         .read()
@@ -111,11 +129,17 @@ async fn send<T: DeserializeOwned, B: Serialize>(
             body: response.text().await.unwrap_or_default(),
         });
     }
-    let value = response.json::<T>().await.map_err(|error| {
+    Ok((response, token))
+}
+
+async fn decode<T: DeserializeOwned>(
+    response: reqwest::Response,
+    operation: &str,
+) -> Result<T, AccountRequestError> {
+    response.json::<T>().await.map_err(|error| {
         tracing::error!(target: LOG_TARGET, operation, "Admin returned an undecodable response: {error:?}");
         AccountRequestError::Undecodable
-    })?;
-    Ok((value, token))
+    })
 }
 
 /// `<server_url>/api/<segments…>`, each segment percent-encoded so caller
@@ -288,6 +312,42 @@ mod tests {
         assert_eq!(token, "tok-1");
     }
 
+    #[tokio::test]
+    async fn body_less_post_sends_no_body() {
+        let url = serve(Router::new().route(
+            "/api/thing",
+            axum::routing::post(|headers: HeaderMap, body: String| async move {
+                Json(serde_json::json!({
+                    "content_type": headers.contains_key("content-type"),
+                    "body": body,
+                }))
+            }),
+        ))
+        .await;
+        let shared = shared_for(&url, Some("tok")).await;
+
+        let (value, _) = post::<serde_json::Value, _>(&shared, &["thing"], NO_BODY, "test write")
+            .await
+            .expect("request succeeds");
+
+        assert_eq!(value["content_type"], false);
+        assert_eq!(value["body"], "");
+    }
+
+    #[tokio::test]
+    async fn raw_post_returns_the_success_body_undecoded() {
+        let url =
+            serve(Router::new().route("/api/thing", axum::routing::post(|| async { "not json" })))
+                .await;
+        let shared = shared_for(&url, Some("tok")).await;
+
+        let body = post_raw(&shared, &["thing"], NO_BODY, "test write")
+            .await
+            .expect("an undecodable success is still a success");
+
+        assert_eq!(body, b"not json");
+    }
+
     /// Answers `POST /api/session` with a refreshed session for `tok-1`,
     /// after running `before_reply` (used to simulate a mid-request change).
     fn session_admin(before_reply: impl Fn() + Clone + Send + Sync + 'static) -> Router {
@@ -341,7 +401,7 @@ mod tests {
         shared.config.write().await.server_url = url;
 
         let (fresh, sent_with) =
-            post::<AccountAuthState, ()>(&shared, &["session"], None, "test write")
+            post::<AccountAuthState, _>(&shared, &["session"], NO_BODY, "test write")
                 .await
                 .expect("request succeeds");
         let result = replace_session(&shared, &sent_with, fresh).await;
