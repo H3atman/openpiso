@@ -47,8 +47,9 @@ pub(crate) struct AccountNotActive;
 /// Price `coin_amounts_cents` for `target` and write the balance once, inside
 /// the caller's open transaction.
 ///
-/// Snapshots the active Shop Rate, the earn rate and the enabled Coin Promo
-/// tiers, then prices each coin on its own, as a one-coin Coin Batch, with the
+/// Checks an Account target is active before anything is priced, then
+/// snapshots the active Shop Rate, the earn rate and the enabled Coin Promo
+/// tiers, and prices each coin on its own, as a one-coin Coin Batch, with the
 /// Points carry chained from one coin to the next. The amounts are never
 /// summed: a Coin Batch passes one amount (the train's pulse sum), a Rejection
 /// Credit passes one amount per coin. To preview, call this and roll the
@@ -58,6 +59,24 @@ pub(crate) async fn apply(
     target: BalanceTarget<'_>,
     coin_amounts_cents: impl IntoIterator<Item = i64>,
 ) -> AppResult<Result<AppliedCoinOutcome, AccountNotActive>> {
+    let account = match target {
+        BalanceTarget::Account { account_id } => {
+            let account = sqlx::query_as::<_, (String, i64)>(
+                "SELECT username, point_earn_carry_centicents
+                 FROM accounts WHERE id = ? AND status = 'active'",
+            )
+            .bind(account_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+            let Some(account) = account else {
+                return Ok(Err(AccountNotActive));
+            };
+            Some(account)
+        }
+        BalanceTarget::GuestTime { .. } => None,
+    };
+    let (account_username, carry_centicents) = account.unzip();
+
     let (rate_amount_cents, rate_seconds) = super::rates::active_rate_in_transaction(tx).await?;
     let coin_promo_tiers = sqlx::query_as::<_, (i64, i64)>(
         "SELECT tier.amount_cents, tier.bonus_seconds
@@ -84,23 +103,9 @@ pub(crate) async fn apply(
         points_earned_centi: 0,
         coin_promo_covered_amount_cents: 0,
         earn_cents_per_point,
-        account_username: None,
-        carry_centicents: None,
+        account_username,
+        carry_centicents,
     };
-    if let BalanceTarget::Account { account_id } = target {
-        let account = sqlx::query_as::<_, (String, i64)>(
-            "SELECT username, point_earn_carry_centicents
-             FROM accounts WHERE id = ? AND status = 'active'",
-        )
-        .bind(account_id)
-        .fetch_optional(&mut **tx)
-        .await?;
-        let Some((username, carry_centicents)) = account else {
-            return Ok(Err(AccountNotActive));
-        };
-        applied.account_username = Some(username);
-        applied.carry_centicents = Some(carry_centicents);
-    }
 
     for amount_cents in coin_amounts_cents {
         // The greedy decomposition of this one amount (ADR-0070): a coin with
