@@ -34,7 +34,22 @@ pub struct UpdateState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download: Option<Download>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready: Option<Ready>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_result: Option<UpdateResult>,
+}
+
+/// A downloaded, verified installer waiting for the Owner's restart action.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ready {
+    pub target_version: String,
+    pub rollback: bool,
+}
+
+struct ParkedInstall {
+    ready: Ready,
+    prepared: Box<dyn PreparedInstall>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,8 +105,9 @@ pub trait Installer: Send + Sync {
     ) -> BoxFuture<'_, AppResult<Box<dyn PreparedInstall>>>;
 }
 
-/// The service persists the restart marker and audit before calling this.
-/// Production hides the kiosk and starts the verified passive NSIS installer.
+/// Parked by the service until the Owner restarts; the service persists the
+/// restart marker and audit before calling this. Production hides the kiosk
+/// and starts the verified passive NSIS installer, which exits the Admin.
 pub trait PreparedInstall: Send {
     fn install(self: Box<Self>) -> BoxFuture<'static, AppResult<()>>;
 }
@@ -308,6 +324,7 @@ pub struct UpdateService {
     checking: Mutex<()>,
     installing: Mutex<()>,
     download: Arc<std::sync::RwLock<Option<Download>>>,
+    parked: std::sync::Mutex<Option<ParkedInstall>>,
 }
 
 impl UpdateService {
@@ -332,7 +349,15 @@ impl UpdateService {
         }
     }
 
-    pub async fn install(
+    fn parked(&self) -> std::sync::MutexGuard<'_, Option<ParkedInstall>> {
+        self.parked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Downloads and verifies the release, then parks it for `restart`. The
+    /// Admin keeps serving; no marker is written. Replaces any parked install.
+    pub async fn prepare(
         &self,
         pool: &SqlitePool,
         installer: &dyn Installer,
@@ -349,6 +374,7 @@ impl UpdateService {
                 "App Update awaiting restart or acknowledgement".to_owned(),
             ));
         }
+        *self.parked() = None;
         let download = self.download.clone();
         let target_version = release.version.clone();
         let progress = Arc::new(move |percent: u8| {
@@ -360,35 +386,60 @@ impl UpdateService {
             });
         });
         let prepared = installer.prepare(release.clone(), rollback, progress).await;
-        if prepared.is_err() {
-            Self::record_result(
-                records,
-                UpdateResult {
-                    from: env!("CARGO_PKG_VERSION").to_owned(),
-                    to: release.version.clone(),
-                    ok: false,
-                },
-            );
-        }
-        let result = async {
-            let prepared = prepared?;
-            let marker = RestartMarker {
-                from_version: env!("CARGO_PKG_VERSION").to_owned(),
-                target_version: release.version,
-                started_at: Utc::now(),
-            };
-            db::app_update::begin_install(pool, &marker, rollback).await?;
-            let result = prepared.install().await;
-            if result.is_err() {
-                self.startup(pool, records).await?;
-            }
-            result
-        }
-        .await;
         *self
             .download
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        match prepared {
+            Ok(prepared) => {
+                *self.parked() = Some(ParkedInstall {
+                    ready: Ready {
+                        target_version: release.version,
+                        rollback,
+                    },
+                    prepared,
+                });
+                Ok(())
+            }
+            Err(error) => {
+                Self::record_result(
+                    records,
+                    UpdateResult {
+                        from: env!("CARGO_PKG_VERSION").to_owned(),
+                        to: release.version,
+                        ok: false,
+                    },
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// Commits the restart marker and audit, then hands the parked installer
+    /// off. In production a successful handoff exits the Admin.
+    pub async fn restart(
+        &self,
+        pool: &SqlitePool,
+        records: &crate::run_record::RunRecordStore,
+    ) -> AppResult<()> {
+        let _installing = self
+            .installing
+            .try_lock()
+            .map_err(|_| AppError::Conflict("App Update already in progress".to_owned()))?;
+        let parked = self
+            .parked()
+            .take()
+            .ok_or_else(|| AppError::Conflict("No App Update is ready to install".to_owned()))?;
+        let marker = RestartMarker {
+            from_version: env!("CARGO_PKG_VERSION").to_owned(),
+            target_version: parked.ready.target_version,
+            started_at: Utc::now(),
+        };
+        db::app_update::begin_install(pool, &marker, parked.ready.rollback).await?;
+        let result = parked.prepared.install().await;
+        if result.is_err() {
+            self.startup(pool, records).await?;
+        }
         result
     }
 
@@ -462,6 +513,7 @@ impl UpdateService {
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
+            ready: self.parked().as_ref().map(|parked| parked.ready.clone()),
         })
     }
 }
@@ -494,6 +546,8 @@ pub mod testing {
         pub fail_prepare: bool,
         pub fail_install: bool,
         pub download_gate: Option<Arc<tokio::sync::Semaphore>>,
+        /// Counts `PreparedInstall::install` calls (installer launches).
+        pub installs: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl Installer for FakeInstaller {
@@ -514,17 +568,25 @@ pub mod testing {
                     ));
                 }
                 progress(100);
-                Ok(Box::new(FakePreparedInstall(self.fail_install)) as Box<dyn PreparedInstall>)
+                Ok(Box::new(FakePreparedInstall {
+                    fail: self.fail_install,
+                    installs: self.installs.clone(),
+                }) as Box<dyn PreparedInstall>)
             })
         }
     }
 
-    struct FakePreparedInstall(bool);
+    struct FakePreparedInstall {
+        fail: bool,
+        installs: Arc<std::sync::atomic::AtomicUsize>,
+    }
 
     impl PreparedInstall for FakePreparedInstall {
         fn install(self: Box<Self>) -> BoxFuture<'static, AppResult<()>> {
             Box::pin(async move {
-                if self.0 {
+                self.installs
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if self.fail {
                     Err(AppError::Internal("installer launch failed".to_owned()))
                 } else {
                     Ok(())

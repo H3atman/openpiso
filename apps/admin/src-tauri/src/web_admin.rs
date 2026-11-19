@@ -686,6 +686,7 @@ pub(crate) fn router(state: OwnerServerState) -> Router {
         .route("/web-admin/update/check", post(app_update_check))
         .route("/web-admin/update/install", post(app_update_install))
         .route("/web-admin/update/rollback", post(app_update_rollback))
+        .route("/web-admin/update/restart", post(app_update_restart))
         .route("/web-admin/update/ack", post(app_update_ack))
         .route(
             "/web-admin/update/auto-check",
@@ -3374,7 +3375,7 @@ async fn app_update_install(
         }
         Ok(release)
     })();
-    app_update_handoff(&state, &input.version, release, false).await
+    app_update_prepare(&state, &input.version, release, false).await
 }
 
 #[derive(Deserialize)]
@@ -3406,10 +3407,11 @@ async fn app_update_rollback(
                 )
             })
     })();
-    app_update_handoff(&state, &input.version, release, true).await
+    app_update_prepare(&state, &input.version, release, true).await
 }
 
-async fn app_update_handoff(
+/// Downloads and verifies the target, leaving it `ready` for the restart route.
+async fn app_update_prepare(
     state: &OwnerServerState,
     version: &str,
     release: crate::errors::AppResult<crate::app_update::Release>,
@@ -3418,7 +3420,7 @@ async fn app_update_handoff(
     let result = async {
         state
             .app_update
-            .install(
+            .prepare(
                 &state.pool,
                 state.installer.as_ref(),
                 &state.run_records,
@@ -3444,6 +3446,32 @@ async fn app_update_handoff(
             },
         );
         event.metadata = serde_json::json!({ "version": version, "error": error.to_string() });
+        audit::append_standalone(&state.pool, event).await?;
+        return Err(error);
+    }
+    Ok(Json(
+        state.app_update.state(&state.pool, &state.sessions).await?,
+    ))
+}
+
+/// Hands the `ready` installer off; in production the Admin exits before
+/// this responds, so the browser sees the connection drop.
+async fn app_update_restart(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+) -> HttpResult<UpdateState> {
+    if let Err(error) = state
+        .app_update
+        .restart(&state.pool, &state.run_records)
+        .await
+    {
+        let mut event = NewAuditEvent::simple(
+            "app_update_restart",
+            AuditOutcome::Failure,
+            AuditActor::Admin,
+            "App Update restart failed or rejected",
+        );
+        event.metadata = serde_json::json!({ "error": error.to_string() });
         audit::append_standalone(&state.pool, event).await?;
         return Err(error);
     }
@@ -9178,6 +9206,11 @@ mod tests {
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![update_release(&newer, 60)])),
         ));
+        let installs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
+            installs: installs.clone(),
+            ..Default::default()
+        });
         let address = spawn(state.clone()).await;
         let client = reqwest::Client::new();
         let auth = setup_and_token(&client, &address, "install-pin").await;
@@ -9213,6 +9246,28 @@ mod tests {
             .await
             .expect("acknowledged install");
         assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = response.json().await.expect("install JSON");
+        assert_eq!(
+            body["ready"],
+            serde_json::json!({ "targetVersion": newer, "rollback": false })
+        );
+        assert!(body.get("download").is_none());
+        let markers: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM settings WHERE key = 'app_update_restart_marker'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("marker count");
+        assert_eq!(markers, 0, "download alone must not hand off");
+        assert_eq!(installs.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let restarted = client
+            .post(format!("http://{address}/web-admin/update/restart"))
+            .owner(&auth)
+            .send()
+            .await
+            .expect("restart");
+        assert_eq!(restarted.status(), StatusCode::OK);
+        assert_eq!(installs.load(std::sync::atomic::Ordering::SeqCst), 1);
         let marker: String = sqlx::query_scalar(
             "SELECT value FROM settings WHERE key = 'app_update_restart_marker'",
         )
@@ -9276,6 +9331,19 @@ mod tests {
             .await
             .expect("compatible rollback");
         assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = response.json().await.expect("rollback JSON");
+        assert_eq!(
+            body["ready"],
+            serde_json::json!({ "targetVersion": "0.11.4", "rollback": true })
+        );
+        client
+            .post(format!("http://{address}/web-admin/update/restart"))
+            .owner(&auth)
+            .send()
+            .await
+            .expect("restart")
+            .error_for_status()
+            .expect("restarted");
         let rows: Vec<String> = sqlx::query_scalar("SELECT outcome FROM audit_log WHERE event_type = 'app_update_rollback' ORDER BY outcome")
             .fetch_all(&state.pool).await.expect("rollback audits");
         assert_eq!(
@@ -9481,7 +9549,18 @@ mod tests {
                 .json(&serde_json::json!({ "version": newer }))
                 .send()
                 .await
-                .expect("failed install");
+                .expect("install");
+            let response = if fail_prepare {
+                response
+            } else {
+                assert_eq!(response.status(), StatusCode::OK);
+                client
+                    .post(format!("http://{address}/web-admin/update/restart"))
+                    .owner(&auth)
+                    .send()
+                    .await
+                    .expect("failed restart")
+            };
             assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
             let body: serde_json::Value = client
                 .get(format!("http://{address}/web-admin/update"))
@@ -9493,6 +9572,7 @@ mod tests {
                 .await
                 .expect("JSON");
             assert!(body.get("download").is_none());
+            assert!(body.get("ready").is_none());
             if fail_prepare {
                 assert!(body.get("lastResult").is_none());
                 let markers: i64 = sqlx::query_scalar(
@@ -9515,10 +9595,44 @@ mod tests {
                     .expect("ack failure");
                 assert_eq!(cleared.status(), StatusCode::OK);
             }
-            let failures: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE event_type = 'app_update_install' AND outcome = 'failure'")
-                .fetch_one(&state.pool).await.expect("failure audit");
+            let failures: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM audit_log WHERE event_type = ? AND outcome = 'failure'",
+            )
+            .bind(if fail_prepare {
+                "app_update_install"
+            } else {
+                "app_update_restart"
+            })
+            .fetch_one(&state.pool)
+            .await
+            .expect("failure audit");
             assert_eq!(failures, 1);
         }
+    }
+
+    #[tokio::test]
+    async fn app_update_restart_without_ready_install_conflicts() {
+        let state = test_state().await;
+        let address = spawn(state.clone()).await;
+        let client = reqwest::Client::new();
+        let auth = setup_and_token(&client, &address, "restart-idle-pin").await;
+        let response = client
+            .post(format!("http://{address}/web-admin/update/restart"))
+            .owner(&auth)
+            .send()
+            .await
+            .expect("idle restart");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let markers: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM settings WHERE key = 'app_update_restart_marker'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("marker count");
+        assert_eq!(markers, 0);
+        let failures: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE event_type = 'app_update_restart' AND outcome = 'failure'")
+            .fetch_one(&state.pool).await.expect("failure audit");
+        assert_eq!(failures, 1);
     }
 
     #[tokio::test]
@@ -9585,6 +9699,14 @@ mod tests {
             install.await.expect("install task").status(),
             StatusCode::OK
         );
+        client
+            .post(format!("http://{address}/web-admin/update/restart"))
+            .owner(&auth)
+            .send()
+            .await
+            .expect("restart")
+            .error_for_status()
+            .expect("restarted");
         let ack = client
             .post(format!("http://{address}/web-admin/update/ack"))
             .owner(&auth)

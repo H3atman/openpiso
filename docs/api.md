@@ -2602,8 +2602,9 @@ its CSRF token and exact same-origin `Origin` header (ADR-0074).
 | `GET /web-admin/update` | — | Current App Update state; no outbound request |
 | `POST /web-admin/update/check` | No body | Check the Release Feed now, then return state; works even with auto-check off |
 | `PUT /web-admin/update/auto-check` | `{ "enabled": bool }` | Persist the preference, then return state |
-| `POST /web-admin/update/install` | `{ "version": string, "acknowledgeSchemaChange"?: bool }` | Prepare the offered App Update, persist restart marker, hand off to Installer; return state if still running |
-| `POST /web-admin/update/rollback` | `{ "version": string, "confirmVersion": string }` | Prepare a current Compatible Rollback candidate; same handoff/response |
+| `POST /web-admin/update/install` | `{ "version": string, "acknowledgeSchemaChange"?: bool }` | Download and verify the offered App Update; return state with `ready`. The Admin keeps running |
+| `POST /web-admin/update/rollback` | `{ "version": string, "confirmVersion": string }` | Download and verify a current Compatible Rollback candidate; same response |
+| `POST /web-admin/update/restart` | No body | Persist restart marker and hand the `ready` installer off; the Admin exits, usually before responding. `409` if nothing is ready |
 | `POST /web-admin/update/ack` | No body | Clear the resolved restart marker and result, then return state |
 
 State uses camelCase:
@@ -2665,25 +2666,36 @@ Install and Compatible Rollback:
   or whitespace; mismatches are `400`.
 - During preparation, GET state includes optional
   `download: { "targetVersion": string, "percent": int }` (0–100). Poll GET
-  while POST waits; GET never waits for the download. Concurrent installs or
-  rollbacks return `409`. Pending restart/results also block another install
-  until acknowledgement. `runningSessionCount` is advisory, never a gate.
+  while POST waits; GET never waits for the download. Concurrent installs,
+  rollbacks or restarts return `409`. Pending restart/results also block
+  another install until acknowledgement. `runningSessionCount` is advisory,
+  never a gate.
+- After successful preparation, state includes optional
+  `ready: { "targetVersion": string, "rollback": bool }` until restart; it is
+  omitted otherwise. The verified installer is held in memory only, so an
+  Admin restart by other means discards it. Preparing again replaces it (and
+  clears it at the start of the new download).
 - The Installer seam is two-phase: `prepare(Release, rollback, progress)`
-  downloads/verifies and returns a `PreparedInstall`; only then does Rust
-  commit the restart marker and audit before calling `PreparedInstall.install`.
-  The production signed Tauri/NSIS adapter is supplied by #422; until wired,
-  the fail-closed adapter returns `500`, without writing a marker.
-- Successful preparation records `app_update_install` or `app_update_rollback`
-  (Admin, success), with `{ fromVersion, version, startedAt }`, atomically with
-  the marker. This means handoff requested, not proof that installation
-  succeeded. Rejected gates, concurrent attempts and Installer errors append
-  the same event type with failure and `{ version, error }`. Download/signature
-  failures leave no marker or pending restart result, but record the failed
-  `{ from, to, ok: false }` outcome in Diagnostics/Run Records and emit a
-  Diagnostics error, using the same evidence mechanism as restart resolution.
-  Launch failures resolve a failed result immediately,
-  clear progress, and can be acknowledged without restarting. Normal HTTP error
-  handling applies to database, audit and Installer errors.
+  downloads/verifies and returns a `PreparedInstall`, which Rust parks as
+  `ready`. Only `POST /web-admin/update/restart` commits the restart marker
+  and audit and then calls `PreparedInstall.install`. On Windows the NSIS
+  handoff exits the Admin, so the restart request usually ends in a dropped
+  connection rather than a response; the Web Admin treats that as the
+  restart and waits for the relaunched Admin (whose first `401` sends the
+  Owner to sign in). Restart with nothing ready returns `409` and writes no
+  marker. The production Installer fails closed with `500` off Windows.
+- Restart records `app_update_install` or `app_update_rollback` (Admin,
+  success), with `{ fromVersion, version, startedAt }`, atomically with the
+  marker. This means handoff requested, not proof that installation
+  succeeded. Rejected install/rollback gates, concurrent attempts and
+  download errors append that event type with failure and `{ version, error }`;
+  rejected or failed restarts append `app_update_restart` with failure and
+  `{ error }`. Download/signature failures leave no marker, `ready` or pending
+  restart result, but record the failed `{ from, to, ok: false }` outcome in
+  Diagnostics/Run Records and emit a Diagnostics error, using the same
+  evidence mechanism as restart resolution. Launch failures resolve a failed
+  result immediately and can be acknowledged without restarting. Normal HTTP
+  error handling applies to database, audit and Installer errors.
 - On startup Rust compares the persisted marker target with the running binary.
   Optional `lastResult: { "from": string, "to": string, "ok": bool }` appears in
   state; `to` is the attempted target (not the running version on failure).

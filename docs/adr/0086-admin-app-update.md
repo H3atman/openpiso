@@ -48,12 +48,20 @@ Source publication is now governed by ADR-0087.
 - **Surface:** owner-authenticated web-admin routes on `:8080` only, never on
   `:3210`. Rust checks, verifies, gates, and installs; the browser shows
   state and sends intents.
-- **Install:** NSIS `passive` in the existing `currentUser` mode (no UAC, and
-  the HKCU autostart stays valid). The kiosk window is hidden first. A restart
-  marker lets the next start report success or failure.
+- **Install (amended 2026-11-20):** NSIS `passive` in the existing
+  `currentUser` mode (no UAC, and the HKCU autostart stays valid). Download
+  and signature verification happen first while the Admin keeps serving; the
+  verified installer then waits. The installer handoff, which closes and
+  relaunches the Admin, happens only when the Owner explicitly chooses
+  restart. The kiosk window is hidden first. A restart marker, written at
+  handoff, lets the next start report success or failure. Reason: the handoff
+  kills the server mid-request, so it cannot share a request with the
+  download, and the Owner should pick the moment.
 - **Restart impact:** Clients lose the server briefly and return to the
   Fullscreen Lock under the existing Offline Shutdown Countdown. Time is
-  server-authoritative and preserved. A planned-restart notice is deferred.
+  server-authoritative and preserved. The restart starts only on the Owner's
+  explicit restart action, never on download. A planned-restart notice is
+  deferred.
 - **Release notes:** drafted locally by `bun run version:*` (AI draft with a
   conventional-commit fallback), reviewed by the maintainer, committed to
   `docs/releases/vX.Y.Z.md`, and used by CI as the release body. CI adds a

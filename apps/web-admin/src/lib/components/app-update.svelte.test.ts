@@ -4,14 +4,21 @@ import { cleanup, render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import AppUpdateHarness from "./AppUpdateHarness.svelte";
 
-vi.mock("../api", () => ({
-  getAppUpdate: vi.fn(),
-  checkAppUpdate: vi.fn(),
-  setAppUpdateAutoCheck: vi.fn(),
-  installAppUpdate: vi.fn(),
-  rollbackAppUpdate: vi.fn(),
-  acknowledgeAppUpdate: vi.fn(),
-}));
+vi.mock("../api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api")>();
+  return {
+    ApiError: actual.ApiError,
+    UnauthenticatedError: actual.UnauthenticatedError,
+    ThrottledError: actual.ThrottledError,
+    getAppUpdate: vi.fn(),
+    checkAppUpdate: vi.fn(),
+    setAppUpdateAutoCheck: vi.fn(),
+    installAppUpdate: vi.fn(),
+    rollbackAppUpdate: vi.fn(),
+    restartAppUpdate: vi.fn(),
+    acknowledgeAppUpdate: vi.fn(),
+  };
+});
 vi.mock("svelte-sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
@@ -64,31 +71,53 @@ describe("App Update", () => {
     await userEvent.hover(row);
     expect(await screen.findByText(summary)).toBeTruthy();
   });
-  it("keeps installs blocked after handoff while awaiting restart", async () => {
+  it("downloads first and restarts only on the explicit action", async () => {
     const offered = {
       ...current,
       available: { ...release, raisesSchema: false, schemaVersion: 58 },
     };
-    vi.mocked(api.getAppUpdate).mockResolvedValue(offered);
-    vi.mocked(api.installAppUpdate).mockResolvedValue(offered);
+    const ready = {
+      ...offered,
+      ready: { targetVersion: "0.12.0", rollback: false },
+    };
+    vi.mocked(api.getAppUpdate)
+      .mockResolvedValueOnce(offered)
+      .mockResolvedValue(ready);
+    vi.mocked(api.installAppUpdate).mockResolvedValue(ready);
+    vi.mocked(api.restartAppUpdate).mockRejectedValue(
+      new api.ApiError(500, "App Update install: launch failed"),
+    );
     render(AppUpdateHarness);
     await userEvent.click(
       await screen.findByRole("button", { name: "Update available · v0.12.0" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Install" }));
     await userEvent.click(
-      screen.getByRole("button", { name: "Install and restart" }),
+      screen.getByRole("button", { name: "Download update" }),
     );
     await waitFor(() =>
-      expect(
-        screen
-          .getByRole("button", { name: "Install" })
-          .hasAttribute("disabled"),
-      ).toBe(true),
+      expect(toast.success).toHaveBeenCalledWith(
+        "v0.12.0 is ready. Restart the Admin to install it.",
+      ),
     );
-    expect(screen.getByRole("status").textContent).toContain(
-      "Waiting for the Admin to restart",
+    expect(screen.getByText("v0.12.0 is downloaded and verified.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Install" })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(api.restartAppUpdate).not.toHaveBeenCalled();
+    // A server error response means no handoff: surface it, allow a retry.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Restart and install" }),
     );
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "App Update install: launch failed",
+      ),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Restart and install" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
   });
   it("polls download progress while install waits and prevents another install", async () => {
     const offered = {
@@ -111,7 +140,7 @@ describe("App Update", () => {
     await userEvent.click(screen.getByRole("button", { name: "Install" }));
     expect(screen.queryByRole("checkbox")).toBeNull();
     await userEvent.click(
-      screen.getByRole("button", { name: "Install and restart" }),
+      screen.getByRole("button", { name: "Download update" }),
     );
     const progress = await screen.findByRole("progressbar", {
       name: "Downloading v0.12.0",
@@ -119,9 +148,52 @@ describe("App Update", () => {
     expect(progress.getAttribute("aria-valuenow")).toBe("62");
     expect(
       screen
-        .getByRole("button", { name: "Install and restart" })
+        .getByRole("button", { name: "Download update" })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+  it("treats the Admin going away after restart as the restart, not an error", async () => {
+    const ready = {
+      ...current,
+      available: { ...release, raisesSchema: false, schemaVersion: 58 },
+      ready: { targetVersion: "0.12.0", rollback: false },
+    };
+    const gone = new TypeError(
+      "NetworkError when attempting to fetch resource.",
+    );
+    let serverUp = true;
+    let dropRestart: (error: Error) => void = () => {};
+    vi.mocked(api.getAppUpdate).mockImplementation(() =>
+      serverUp ? Promise.resolve(ready) : Promise.reject(gone),
+    );
+    vi.mocked(api.restartAppUpdate).mockImplementation(
+      () => new Promise((_, reject) => (dropRestart = reject)),
+    );
+    render(AppUpdateHarness);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Update available · v0.12.0" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Restart and install" }),
+    );
+    // The Installer handoff exits the Admin: the POST and every poll now fail.
+    serverUp = false;
+    dropRestart(gone);
+    const calls = vi.mocked(api.getAppUpdate).mock.calls.length;
+    await waitFor(
+      () =>
+        expect(vi.mocked(api.getAppUpdate).mock.calls.length).toBeGreaterThan(
+          calls + 1,
+        ),
+      { timeout: 3_000 },
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain(
+        "Waiting for the Admin to restart",
+      ),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
   });
   it("persists auto-check off and toasts manual check failures", async () => {
     vi.mocked(api.setAppUpdateAutoCheck).mockResolvedValue({
@@ -226,7 +298,7 @@ describe("App Update", () => {
       screen.getByRole("button", { name: "Roll back to v0.11.4" }),
     );
     const confirm = screen.getByRole("button", {
-      name: "Roll back and restart",
+      name: "Download rollback",
     });
     expect(
       screen.getByText("2 PCs have running time.", { exact: false }),
@@ -261,7 +333,7 @@ describe("App Update", () => {
       await screen.findByRole("button", { name: "Update available · v0.12.0" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Install" }));
-    const confirm = screen.getByRole("button", { name: "Install and restart" });
+    const confirm = screen.getByRole("button", { name: "Download update" });
     expect(confirm.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText("2 PCs have running time.", { exact: false }),

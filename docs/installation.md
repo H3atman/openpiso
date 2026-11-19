@@ -661,10 +661,12 @@ or click for release notes, **Check now**, last checked time, and automatic
 checks. Automatic checks default on at startup and every six hours; turning
 these off suppresses automatic outbound checks, not **Check now**.
 
-**Install** asks for confirmation and restarts the Admin after the signed
-installer is verified. A release that raises the **Schema Version** also
-requires **I understand**: returning below that boundary needs a
-Pre-Migration Backup restore. The panel shows download progress. Running PCs
+**Install** asks for confirmation, then **Download update** downloads and
+verifies the signed installer while the Admin keeps running. A release that
+raises the **Schema Version** also requires **I understand**: returning below
+that boundary needs a Pre-Migration Backup restore. The panel shows download
+progress, then **Restart and install**; nothing restarts until you click it,
+so pick a quiet moment. Running PCs
 produce a count warning, not a block: paid time is preserved, Clients enter
 the Fullscreen Lock under the Offline Shutdown Countdown and resume when the
 Admin reconnects. Sign in again after the restart to see its success/failure
@@ -674,7 +676,8 @@ without a restart marker.
 
 Expand **Compatible Rollback** for older stable releases with the same Schema
 Version. Read the red warning and type the exact target version (no `v` prefix
-or spaces) before confirming. Other Schema Versions are not offered. App
+or spaces), then **Download rollback**, then **Restart and roll back**. Other
+Schema Versions are not offered. App
 Update covers Admin only, not Clients or Client Guard.
 
 ### Windows installer
