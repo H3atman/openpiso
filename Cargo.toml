@@ -17,7 +17,7 @@ expect_used = "deny"
 
 [workspace.package]
 edition = "2021"
-version = "0.12.10"
+version = "0.12.11"
 license = "PolyForm-Shield-1.0.0"
 authors = ["OpenPiso Contributors"]
 
