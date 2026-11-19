@@ -794,6 +794,12 @@ computed exactly as an accepted coin's would be: **Shop Rate** seconds, **Points
 with the centicent carry, and any matching **Coin Promo** bonus for an Account
 target; base Shop Rate seconds only for a Guest target.
 
+Each coin is priced on its own, as a one-coin **Coin Batch**: the coins of one
+Rejection Credit are never summed into a train. Two ₱5 coins earn the ₱5
+**Coin Promo Tier** twice and never the ₱10 tier, and a coin with no tier of its
+own is decomposed into smaller tiers exactly as that coin accepted alone would
+be.
+
 It is **Cash Revenue** (`cash_flag = 1`) because the money is in the coin box,
 with any promo component reported under **Free Time Dispensed**. It writes a
 canonical `rejection_credit` **Alert** event plus a `rejection_credits` detail

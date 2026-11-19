@@ -9,12 +9,17 @@
 //! The credited value is computed by the same [`compute_coin_outcome`] the coin
 //! path uses, so a Rejection Credit is worth exactly what the accepted coin
 //! would have been worth: Shop Rate seconds, Points with the centicent carry,
-//! and any exact-match Coin Promo bonus for an Account target; base Shop Rate
-//! seconds only for a Guest target.
+//! and the Coin Promo bonus for an Account target; base Shop Rate seconds only
+//! for a Guest target.
+//!
+//! Each coin is priced on its own, as a one-coin Coin Batch: its amount is
+//! decomposed greedily into Coin Promo Tier amounts by [`coin_promo_match`],
+//! so a coin with no tier of its own still earns the smaller tiers it covers.
+//! The coins of one credit are never summed into a train.
 
 use openpiso_core::{
     audit::{AuditActor, AuditOutcome},
-    pricing::{compute_coin_outcome, CoinOutcomeTarget},
+    pricing::{coin_promo_match, compute_coin_outcome, CoinOutcomeTarget, CoinPromoTierRate},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -344,19 +349,27 @@ pub async fn create(
     )
     .fetch_one(&mut *tx)
     .await?;
-    let promo_bonus_seconds = sqlx::query_scalar::<_, i64>(
-        "SELECT tier.bonus_seconds
+    let coin_promo_tiers = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT tier.amount_cents, tier.bonus_seconds
          FROM coin_promo_settings settings
-         JOIN coin_promo_tiers tier ON tier.amount_cents = ?
+         JOIN coin_promo_tiers tier
          WHERE settings.id = 1 AND settings.enabled = 1",
     )
-    .bind(input.denomination_cents)
-    .fetch_optional(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?
-    .unwrap_or(0);
+    .into_iter()
+    .map(|(amount_cents, bonus_seconds)| CoinPromoTierRate {
+        amount_cents,
+        bonus_seconds,
+    })
+    .collect::<Vec<_>>();
+    let promo_bonus_seconds =
+        coin_promo_match(input.denomination_cents, &coin_promo_tiers)?.bonus_seconds;
 
     // One outcome per coin, chaining the carry exactly as N accepted coins
-    // would have. A Coin Promo tier matches one coin's amount, never a total.
+    // would have. The Coin Promo match is the greedy decomposition of one
+    // coin's amount, as for a one-coin Coin Batch; the coins are never summed
+    // into a train, so two ₱5 coins never reach a ₱10 tier.
     let mut seconds_added = 0_i64;
     let mut coin_promo_bonus_seconds = 0_i64;
     let mut points_earned_centi = 0_i64;
@@ -726,6 +739,137 @@ mod tests {
                 .fetch_one(&pool)
                 .await?;
         assert_eq!(cash, 100);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coin_without_its_own_tier_earns_the_smaller_tiers_it_covers() -> AppResult<()> {
+        let pool = test_pool().await?;
+        let account = crate::accounts::create(
+            &pool,
+            "twenty-peso-customer",
+            "password",
+            AccountCreator::Admin,
+            None,
+        )
+        .await?;
+        // A ₱10 tier and no ₱20 tier.
+        sqlx::query(
+            "INSERT INTO coin_promo_tiers (amount_cents, bonus_seconds) VALUES (1000, 600)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("UPDATE coin_promo_settings SET enabled = 1 WHERE id = 1")
+            .execute(&pool)
+            .await?;
+        insert_rejection(
+            &pool,
+            "rej-twenty",
+            Some(&account.id),
+            json!({ "pulse_count": 11 }),
+        )
+        .await?;
+        let twenty = RejectionCreditInput {
+            denomination_cents: 2000,
+            ..input("rej-twenty", 1)
+        };
+
+        // The ₱20 coin accepted alone earns the ₱10 bonus twice: 6000 + 2 × 600.
+        let preview = create(
+            &pool,
+            &RejectionCreditInput {
+                dry_run: true,
+                ..twenty.clone()
+            },
+        )
+        .await?;
+        assert_eq!(preview.coin_promo_bonus_seconds, 1200);
+        assert_eq!(preview.seconds_added, 7200);
+        assert!(preview.audit_event_id.is_none());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM rejection_credits")
+                .fetch_one(&pool)
+                .await?,
+            0
+        );
+        let balance = "SELECT remaining_seconds FROM accounts WHERE id = ?";
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(balance)
+                .bind(&account.id)
+                .fetch_one(&pool)
+                .await?,
+            0
+        );
+
+        let credit = create(&pool, &twenty).await?;
+        assert_eq!(credit.coin_promo_bonus_seconds, 1200);
+        assert_eq!(credit.seconds_added, 7200);
+        assert_eq!(credit.points_earned_centi, preview.points_earned_centi);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(balance)
+                .bind(&account.id)
+                .fetch_one(&pool)
+                .await?,
+            7200
+        );
+
+        // The Audit Event and the detail row record the corrected bonus.
+        let metadata_json: String = sqlx::query_scalar(
+            "SELECT metadata_json FROM audit_log WHERE event_type = 'rejection_credit'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_json)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        assert_eq!(metadata["coin_promo_bonus_seconds"], 1200);
+        let detail_bonus: i64 =
+            sqlx::query_scalar("SELECT coin_promo_bonus_seconds FROM rejection_credits")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(detail_bonus, 1200);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coins_of_one_credit_are_never_summed_into_a_train() -> AppResult<()> {
+        let pool = test_pool().await?;
+        let account = crate::accounts::create(
+            &pool,
+            "two-fives-customer",
+            "password",
+            AccountCreator::Admin,
+            None,
+        )
+        .await?;
+        sqlx::query(
+            "INSERT INTO coin_promo_tiers (amount_cents, bonus_seconds)
+             VALUES (500, 200), (1000, 900)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("UPDATE coin_promo_settings SET enabled = 1 WHERE id = 1")
+            .execute(&pool)
+            .await?;
+        insert_rejection(
+            &pool,
+            "rej-two-fives",
+            Some(&account.id),
+            json!({ "pulse_count": serde_json::Value::Null, "suppressed_count": 2 }),
+        )
+        .await?;
+
+        // Two ₱5 coins earn the ₱5 bonus twice, never the ₱10 bonus:
+        // 2 × 1500 + 2 × 200.
+        let credit = create(
+            &pool,
+            &RejectionCreditInput {
+                denomination_cents: 500,
+                ..input("rej-two-fives", 2)
+            },
+        )
+        .await?;
+        assert_eq!(credit.coin_promo_bonus_seconds, 400);
+        assert_eq!(credit.seconds_added, 3400);
         Ok(())
     }
 
