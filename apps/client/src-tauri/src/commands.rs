@@ -7,6 +7,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tracing::warn;
 
 use crate::{
+    account_request::{self, AccountRequestError},
     client_connection, config_store,
     discovery::{self, DiscoveredServer},
     state::{AppState, ClientConfig, SharedState, ThemeRecord, TimerState},
@@ -53,6 +54,29 @@ fn transport_error(operation: &str, error: &reqwest::Error) -> String {
         "{ADMIN_UNREACHABLE}: {error:?}"
     );
     ADMIN_UNREACHABLE.to_owned()
+}
+
+/// Customer copy when an account action is attempted with no Account Session.
+const LOG_IN_TO_CONTINUE: &str = "log in to continue";
+
+/// Customer copy when the Account Session changed while a request was in flight.
+const SESSION_CHANGED: &str = "Your session changed before this finished. Check your balance.";
+
+/// Customer copy for a failed Account Session request. A rejection shows the
+/// Admin's body text, or `rejected_fallback` when the body is empty.
+fn account_request_message(
+    error: AccountRequestError,
+    rejected_fallback: &str,
+    undecodable: &str,
+) -> String {
+    match error {
+        AccountRequestError::NotLoggedIn => LOG_IN_TO_CONTINUE.to_owned(),
+        AccountRequestError::Unreachable => ADMIN_UNREACHABLE.to_owned(),
+        AccountRequestError::Rejected { body, .. } if !body.is_empty() => body,
+        AccountRequestError::Rejected { .. } => rejected_fallback.to_owned(),
+        AccountRequestError::Undecodable => undecodable.to_owned(),
+        AccountRequestError::SessionChanged => SESSION_CHANGED.to_owned(),
+    }
 }
 
 async fn set_account_auth(shared: &SharedState, auth: AccountAuthState) {
@@ -561,66 +585,44 @@ pub async fn redeem_voucher(
     state: State<'_, AppState>,
     code: String,
 ) -> Result<AccountAuthState, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "log in before redeeming a voucher".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/vouchers/redeem",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .post(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
+    let message = |error| {
+        account_request_message(
+            error,
+            "voucher redemption failed",
+            "invalid account response",
         )
-        .json(&VoucherRedeemRequest { code: &code })
-        .send()
+    };
+    let (auth, sent_with) = account_request::post::<AccountAuthState, _>(
+        &state.shared,
+        &["vouchers", "redeem"],
+        Some(&VoucherRedeemRequest { code: &code }),
+        "voucher redemption",
+    )
+    .await
+    .map_err(message)?;
+    account_request::replace_session(&state.shared, &sent_with, auth)
         .await
-        .map_err(|error| transport_error("voucher redemption", &error))?;
-    store_account_response(&state.shared, response, "voucher redemption failed").await
+        .map_err(message)
 }
 
 #[tauri::command]
 pub async fn get_redemption_tiers(
     state: State<'_, AppState>,
 ) -> Result<RedemptionTierMenu, String> {
-    let auth = state
-        .shared
-        .account_auth
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "log in before viewing Redemption Tiers".to_owned())?;
-    let config = state.shared.config.read().await.clone();
-    let endpoint = format!(
-        "{}/api/points/redemption-tiers",
-        config.server_url.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .get(endpoint)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", auth.token),
+    account_request::get(
+        &state.shared,
+        &["points", "redemption-tiers"],
+        "Redemption Tier menu",
+    )
+    .await
+    .map(|(menu, _)| menu)
+    .map_err(|error| {
+        account_request_message(
+            error,
+            "Redemption Tier menu failed",
+            "invalid Redemption Tier menu",
         )
-        .send()
-        .await
-        .map_err(|error| transport_error("Redemption Tier menu", &error))?;
-    if !response.status().is_success() {
-        return Err(response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Redemption Tier menu failed".to_owned()));
-    }
-    response
-        .json::<RedemptionTierMenu>()
-        .await
-        .map_err(|error| format!("invalid Redemption Tier menu: {error}"))
+    })
 }
 
 #[tauri::command]
