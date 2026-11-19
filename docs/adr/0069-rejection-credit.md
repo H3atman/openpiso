@@ -94,8 +94,12 @@ The credit reuses `compute_coin_outcome`. For an Account target it credits:
 
 - **Shop Rate** seconds for the amount (integer division, ADR-0066);
 - **Points**, including the `point_earn_carry_centicents` carry (ADR-0038); and
-- the matching **Coin Promo** bonus, if a tier matches the amount exactly
-  (ADR-0052).
+- the **Coin Promo** bonus of each coin priced on its own, as a one-coin
+  **Coin Batch**: its amount is decomposed into **Coin Promo Tier** amounts
+  exactly as that coin accepted alone would be, so a coin with no tier of its
+  own earns the smaller tiers it covers, and the coins of one credit are never
+  summed into a train (two ₱5 coins earn the ₱5 tier twice, never the ₱10
+  tier) (ADR-0052, ADR-0070).
 
 For a Guest target it credits **base Shop Rate seconds only** — no Points, no
 Coin Promo — because both are account-only at insertion (ADR-0003, ADR-0008,

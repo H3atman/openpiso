@@ -1,3 +1,4 @@
+mod account_request;
 mod attendance;
 mod client_connection;
 mod commands;
