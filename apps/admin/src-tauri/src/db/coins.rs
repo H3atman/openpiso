@@ -1,10 +1,4 @@
-use openpiso_core::{
-    audit::{AuditActor, AuditOutcome},
-    pricing::{
-        coin_promo_match as coin_promo_match_for_amount, compute_coin_outcome, CoinOutcomeTarget,
-        CoinPromoTierRate,
-    },
-};
+use openpiso_core::audit::{AuditActor, AuditOutcome};
 use serde_json::json;
 use sqlx::{SqlitePool, Transaction};
 use uuid::Uuid;
@@ -13,7 +7,10 @@ use tracing::warn;
 
 use crate::{
     audit::{self, NewAuditEvent},
-    db::{attendance, attendance_earning},
+    db::{
+        attendance, attendance_earning,
+        coin_outcome::{self, AccountNotActive, BalanceTarget},
+    },
     errors::{AppError, AppResult},
     models::{CoinEventInput, CoinSourceClaim, CoinTarget, CoinTransaction, TodayReport},
 };
@@ -327,128 +324,33 @@ async fn record_coin_event_inner(
 
     let resolved = resolve_coin_source(&mut transaction, claim).await?;
 
-    let (rate_amount_cents, rate_seconds) =
-        super::rates::active_rate_in_transaction(&mut transaction).await?;
-
-    // A Coin Batch is a whole coin train, not one coin (ADR-0070), so the
-    // amount is decomposed into tier amounts rather than matched exactly.
-    let coin_promo_tiers = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT tier.amount_cents, tier.bonus_seconds
-         FROM coin_promo_settings settings
-         JOIN coin_promo_tiers tier
-         WHERE settings.id = 1 AND settings.enabled = 1",
-    )
-    .fetch_all(&mut *transaction)
-    .await?
-    .into_iter()
-    .map(|(amount_cents, bonus_seconds)| CoinPromoTierRate {
-        amount_cents,
-        bonus_seconds,
-    })
-    .collect::<Vec<_>>();
-    let coin_promo_match = coin_promo_match_for_amount(input.amount_cents, &coin_promo_tiers)?;
-    let candidate_coin_promo_bonus_seconds = coin_promo_match.bonus_seconds;
-
     let transaction_id = Uuid::new_v4().to_string();
-    let earn_cents_per_point: i64 =
-        sqlx::query_scalar("SELECT earn_cents_per_point FROM economy_settings WHERE id = 1")
-            .fetch_one(&mut *transaction)
-            .await?;
 
-    let (
-        account_id,
-        account_username,
-        seconds_added,
-        coin_promo_bonus_seconds,
-        points_earned_centi,
-        carry_centicents,
-        target_kind,
-    ) = match target {
-        CoinTarget::Guest => {
-            let outcome = compute_coin_outcome(
-                input.amount_cents,
-                CoinOutcomeTarget::Guest,
-                candidate_coin_promo_bonus_seconds,
-                earn_cents_per_point,
-                rate_amount_cents,
-                rate_seconds,
-            )?;
-            (
-                None,
-                None,
-                outcome.seconds_added,
-                outcome.coin_promo_bonus_seconds,
-                outcome.points_earned_centi,
-                None,
-                "guest",
-            )
-        }
-        CoinTarget::Account { account_id } => {
-            let account = sqlx::query_as::<_, (String, i64)>(
-                "SELECT username, point_earn_carry_centicents
-                 FROM accounts WHERE id = ? AND status = 'active'",
-            )
-            .bind(account_id)
-            .fetch_optional(&mut *transaction)
-            .await?
-            .ok_or_else(|| {
-                warn!(
-                    target: "openpiso_admin_lib::coins",
-                    reason = "account_missing_or_inactive",
-                    account_id = %account_id,
-                    pc_id = %pc_id,
-                    "Coin commit rejected"
-                );
-                AppError::NotFound("active account".to_owned())
-            })?;
-            let outcome = compute_coin_outcome(
-                input.amount_cents,
-                CoinOutcomeTarget::Account {
-                    prior_carry_centicents: account.1,
-                },
-                candidate_coin_promo_bonus_seconds,
-                earn_cents_per_point,
-                rate_amount_cents,
-                rate_seconds,
-            )?;
-            (
-                Some(account_id),
-                Some(account.0),
-                outcome.seconds_added,
-                outcome.coin_promo_bonus_seconds,
-                outcome.points_earned_centi,
-                Some(outcome.new_carry_centicents),
-                "account",
-            )
-        }
+    // A Coin Batch is a whole coin train, not one coin (ADR-0070): the pulse
+    // sum is priced as one amount.
+    let (account_id, balance_target, target_kind) = match target {
+        CoinTarget::Guest => (None, BalanceTarget::GuestTime { pc_id }, "guest"),
+        CoinTarget::Account { account_id } => (
+            Some(account_id),
+            BalanceTarget::Account { account_id },
+            "account",
+        ),
     };
-
-    if let Some(account_id) = account_id {
-        sqlx::query(
-            "UPDATE accounts
-             SET remaining_seconds = remaining_seconds + ?,
-                 points_balance_centi = points_balance_centi + ?,
-                 point_earn_carry_centicents = ?,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status = 'active'",
-        )
-        .bind(seconds_added)
-        .bind(points_earned_centi)
-        .bind(carry_centicents.unwrap_or(0))
-        .bind(account_id)
-        .execute(&mut *transaction)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE pcs
-             SET remaining_seconds = remaining_seconds + ?, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?",
-        )
-        .bind(seconds_added)
-        .bind(pc_id)
-        .execute(&mut *transaction)
-        .await?;
-    }
+    let outcome = coin_outcome::apply(&mut transaction, balance_target, [input.amount_cents])
+        .await?
+        .map_err(|AccountNotActive| {
+            warn!(
+                target: "openpiso_admin_lib::coins",
+                reason = "account_missing_or_inactive",
+                account_id = %account_id.unwrap_or_default(),
+                pc_id = %pc_id,
+                "Coin commit rejected"
+            );
+            AppError::NotFound("active account".to_owned())
+        })?;
+    let seconds_added = outcome.seconds_added;
+    let coin_promo_bonus_seconds = outcome.coin_promo_bonus_seconds;
+    let points_earned_centi = outcome.points_earned_centi;
 
     let mut audit_event = NewAuditEvent::simple(
         "coin_accepted",
@@ -473,10 +375,10 @@ async fn record_coin_event_inner(
         "device_timestamp": input.timestamp,
         "source": resolved.source,
         "target_kind": target_kind,
-        "earn_cents_per_point": earn_cents_per_point,
-        "point_earn_carry_centicents": carry_centicents,
-        "coin_promo_amount_cents": (coin_promo_match.covered_amount_cents > 0)
-            .then_some(coin_promo_match.covered_amount_cents),
+        "earn_cents_per_point": outcome.earn_cents_per_point,
+        "point_earn_carry_centicents": outcome.carry_centicents,
+        "coin_promo_amount_cents": (outcome.coin_promo_covered_amount_cents > 0)
+            .then_some(outcome.coin_promo_covered_amount_cents),
         "coin_promo_bonus_seconds": coin_promo_bonus_seconds,
         "coin_trace_id": coin_trace_id_str
     });
@@ -559,7 +461,7 @@ async fn record_coin_event_inner(
          FROM coin_transactions t WHERE t.id = ?",
     )
     .bind(pc_name)
-    .bind(account_username)
+    .bind(outcome.account_username)
     .bind(transaction_id)
     .fetch_one(pool)
     .await?;

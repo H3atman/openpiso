@@ -6,21 +6,18 @@
 //! one, otherwise that PC's Guest Time. Live occupancy is never read, so a
 //! stale click cannot pay one customer's money to another.
 //!
-//! The credited value is computed by the same [`compute_coin_outcome`] the coin
-//! path uses, so a Rejection Credit is worth exactly what the accepted coin
-//! would have been worth: Shop Rate seconds, Points with the centicent carry,
-//! and the Coin Promo bonus for an Account target; base Shop Rate seconds only
-//! for a Guest target.
+//! The credited value is priced and written by the same
+//! [`coin_outcome::apply`] the coin path uses, so a Rejection Credit is worth
+//! exactly what the accepted coin would have been worth: Shop Rate seconds,
+//! Points with the centicent carry, and the Coin Promo bonus for an Account
+//! target; base Shop Rate seconds only for a Guest target.
 //!
 //! Each coin is priced on its own, as a one-coin Coin Batch: its amount is
-//! decomposed greedily into Coin Promo Tier amounts by [`coin_promo_match`],
-//! so a coin with no tier of its own still earns the smaller tiers it covers.
-//! The coins of one credit are never summed into a train.
+//! decomposed greedily into Coin Promo Tier amounts, so a coin with no tier of
+//! its own still earns the smaller tiers it covers. The coins of one credit
+//! are never summed into a train.
 
-use openpiso_core::{
-    audit::{AuditActor, AuditOutcome},
-    pricing::{coin_promo_match, compute_coin_outcome, CoinOutcomeTarget, CoinPromoTierRate},
-};
+use openpiso_core::audit::{AuditActor, AuditOutcome};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::SqlitePool;
@@ -28,7 +25,10 @@ use uuid::Uuid;
 
 use crate::{
     audit::{self, NewAuditEvent},
-    db::{attendance, attendance_earning},
+    db::{
+        attendance, attendance_earning,
+        coin_outcome::{self, AccountNotActive, BalanceTarget},
+    },
     errors::{AppError, AppResult},
 };
 
@@ -323,82 +323,30 @@ pub async fn create(
     // been deleted is refused rather than silently falling back to the PC's
     // Guest Time, which would hand a deleted customer's money to whoever sits
     // down next (ADR-0011 forfeits a deleted balance on purpose).
-    let account = match recorded_account_id.as_deref() {
-        Some(account_id) => {
-            let found = sqlx::query_as::<_, (String, String, i64)>(
-                "SELECT id, username, point_earn_carry_centicents
-                 FROM accounts WHERE id = ? AND status = 'active'",
-            )
-            .bind(account_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some(found) = found else {
-                return Err(AppError::Conflict(
-                    "the Account recorded on this rejection has been deleted".to_owned(),
-                ));
-            };
-            Some(found)
-        }
-        None => None,
+    let account_id = recorded_account_id.as_deref();
+    let balance_target = match account_id {
+        Some(account_id) => BalanceTarget::Account { account_id },
+        None => BalanceTarget::GuestTime { pc_id: &pc_id },
     };
-
-    let (rate_amount_cents, rate_seconds) =
-        super::rates::active_rate_in_transaction(&mut tx).await?;
-    let earn_cents_per_point = sqlx::query_scalar::<_, i64>(
-        "SELECT earn_cents_per_point FROM economy_settings WHERE id = 1",
+    // One coin amount per coin, exactly as N accepted coins would have been
+    // priced; the coins are never summed into a train, so two ₱5 coins never
+    // reach a ₱10 tier. A dry run rolls this balance write back below.
+    let outcome = coin_outcome::apply(
+        &mut tx,
+        balance_target,
+        (0..input.coins).map(|_| input.denomination_cents),
     )
-    .fetch_one(&mut *tx)
-    .await?;
-    let coin_promo_tiers = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT tier.amount_cents, tier.bonus_seconds
-         FROM coin_promo_settings settings
-         JOIN coin_promo_tiers tier
-         WHERE settings.id = 1 AND settings.enabled = 1",
-    )
-    .fetch_all(&mut *tx)
     .await?
-    .into_iter()
-    .map(|(amount_cents, bonus_seconds)| CoinPromoTierRate {
-        amount_cents,
-        bonus_seconds,
-    })
-    .collect::<Vec<_>>();
-    let promo_bonus_seconds =
-        coin_promo_match(input.denomination_cents, &coin_promo_tiers)?.bonus_seconds;
-
-    // One outcome per coin, chaining the carry exactly as N accepted coins
-    // would have. The Coin Promo match is the greedy decomposition of one
-    // coin's amount, as for a one-coin Coin Batch; the coins are never summed
-    // into a train, so two ₱5 coins never reach a ₱10 tier.
-    let mut seconds_added = 0_i64;
-    let mut coin_promo_bonus_seconds = 0_i64;
-    let mut points_earned_centi = 0_i64;
-    let mut carry_centicents = account.as_ref().map(|(_, _, carry)| *carry);
-    for _ in 0..input.coins {
-        let target = match carry_centicents {
-            Some(prior_carry_centicents) => CoinOutcomeTarget::Account {
-                prior_carry_centicents,
-            },
-            None => CoinOutcomeTarget::Guest,
-        };
-        let outcome = compute_coin_outcome(
-            input.denomination_cents,
-            target,
-            promo_bonus_seconds,
-            earn_cents_per_point,
-            rate_amount_cents,
-            rate_seconds,
-        )?;
-        seconds_added += outcome.seconds_added;
-        coin_promo_bonus_seconds += outcome.coin_promo_bonus_seconds;
-        points_earned_centi += outcome.points_earned_centi;
-        if carry_centicents.is_some() {
-            carry_centicents = Some(outcome.new_carry_centicents);
-        }
-    }
+    .map_err(|AccountNotActive| {
+        AppError::Conflict("the Account recorded on this rejection has been deleted".to_owned())
+    })?;
+    let seconds_added = outcome.seconds_added;
+    let coin_promo_bonus_seconds = outcome.coin_promo_bonus_seconds;
+    let points_earned_centi = outcome.points_earned_centi;
+    let account_username = outcome.account_username;
 
     let amount_cents = input.denomination_cents * input.coins;
-    let target_kind = if account.is_some() {
+    let target_kind = if account_id.is_some() {
         "account"
     } else {
         "guest"
@@ -408,8 +356,8 @@ pub async fn create(
         rejection_audit_id: rejection_audit_id.to_owned(),
         audit_event_id: None,
         target_kind: target_kind.to_owned(),
-        account_id: account.as_ref().map(|(id, _, _)| id.clone()),
-        account_username: account.as_ref().map(|(_, username, _)| username.clone()),
+        account_id: recorded_account_id.clone(),
+        account_username: account_username.clone(),
         pc_id: pc_id.clone(),
         pc_name,
         denomination_cents: input.denomination_cents,
@@ -426,38 +374,8 @@ pub async fn create(
         return Ok(result);
     }
 
-    match account.as_ref() {
-        Some((account_id, _, _)) => {
-            sqlx::query(
-                "UPDATE accounts
-                 SET remaining_seconds = remaining_seconds + ?,
-                     points_balance_centi = points_balance_centi + ?,
-                     point_earn_carry_centicents = ?,
-                     updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ? AND status = 'active'",
-            )
-            .bind(seconds_added)
-            .bind(points_earned_centi)
-            .bind(carry_centicents.unwrap_or(0))
-            .bind(account_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-        None => {
-            sqlx::query(
-                "UPDATE pcs
-                 SET remaining_seconds = remaining_seconds + ?, updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ?",
-            )
-            .bind(seconds_added)
-            .bind(&pc_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-    }
-
-    let summary = match account.as_ref() {
-        Some((_, username, _)) => format!(
+    let summary = match account_username.as_deref() {
+        Some(username) => format!(
             "Credited {} rejected coin(s) to Account {username}",
             input.coins
         ),
@@ -473,7 +391,7 @@ pub async fn create(
         &summary,
     );
     event.pc_id = Some(&pc_id);
-    event.account_id = account.as_ref().map(|(id, _, _)| id.as_str());
+    event.account_id = account_id;
     event.amount_cents = Some(amount_cents);
     event.seconds_delta = Some(seconds_added);
     event.points_delta_centi = Some(points_earned_centi);
@@ -494,7 +412,7 @@ pub async fn create(
     // Disabled Attendance must preserve the legacy credit path without even
     // reading the original rejection timestamp. Otherwise qualification uses
     // the frozen Account and the settings/Shop Hours evidence at that instant.
-    if let Some((account_id, _, _)) = account.as_ref() {
+    if let Some(account_id) = account_id {
         if attendance::enabled_in_transaction(&mut tx).await? {
             let offset = attendance::host_offset();
             let original_rejection_at =
@@ -547,11 +465,7 @@ pub async fn create(
     .bind(rejection_audit_id)
     .bind(&audit_event_id)
     .bind(&pc_id)
-    .bind(
-        account
-            .as_ref()
-            .map(|(account_id, _, _)| account_id.as_str()),
-    )
+    .bind(account_id)
     .bind(target_kind)
     .bind(input.denomination_cents)
     .bind(input.coins)

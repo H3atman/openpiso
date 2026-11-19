@@ -6,6 +6,7 @@ pub mod attendance_client;
 pub mod attendance_earning;
 pub mod attendance_reports;
 pub mod backup_schedule;
+pub mod coin_outcome;
 pub mod coin_promo;
 pub mod coins;
 pub mod diagnostics_mode;
