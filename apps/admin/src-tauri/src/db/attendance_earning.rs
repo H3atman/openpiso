@@ -1109,7 +1109,8 @@ mod tests {
         // The 30-day creditable window compares against the host clock, so the
         // rejection must sit one hour before the real now. Freeze eligibility
         // for its real local date and rewind the clock beneath the instants.
-        let offset = offset();
+        // The credit path resolves dates with the host offset, so the test must too.
+        let offset = crate::db::attendance::host_offset();
         let rejection_at = Utc::now() - Duration::hours(1);
         let rejection_date = rejection_at.with_timezone(&offset).date_naive();
         freeze_eligible_date(&pool, rejection_date, offset).await?;

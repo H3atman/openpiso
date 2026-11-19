@@ -48,6 +48,22 @@ afterEach(async () => {
 });
 
 describe("App Update", () => {
+  // Keep first: jsdom's :focus-visible tracks focus history across the shared
+  // window, so after earlier tests Tab focus may no longer count as visible.
+  it("opens the row tooltip on hover but not on keyboard focus", async () => {
+    render(AppUpdateHarness);
+    const row = await screen.findByRole("button", {
+      name: "App Update · v0.11.5",
+    });
+    while (document.activeElement !== row) await userEvent.tab();
+    expect(row.matches(":focus-visible")).toBe(true);
+    const summary = "View the installed version and check for App Updates.";
+    // Let any focus-opened tooltip render before asserting it stayed closed.
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText(summary)).toBeNull();
+    await userEvent.hover(row);
+    expect(await screen.findByText(summary)).toBeTruthy();
+  });
   it("keeps installs blocked after handoff while awaiting restart", async () => {
     const offered = {
       ...current,
