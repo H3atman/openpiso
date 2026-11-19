@@ -248,10 +248,11 @@
 {#snippet row()}
   <Sidebar.Menu>
     <Sidebar.MenuItem>
-      <!-- Pointer-driven focus must not open the tooltip: closing the Sheet
-           returns focus to this row, which would reopen it and leave it
-           showing until blur. Keyboard focus still opens it. -->
-      <Tooltip.Root ignoreNonKeyboardFocus disableHoverableContent>
+      <!-- Hover-only: the row keeps focus after the Sheet closes and the
+           browser re-fires focus whenever the window regains focus, so a
+           focus-opened tooltip would show until blur. The row's visible label
+           and aria-label already name it. -->
+      <Tooltip.Root disableHoverableContent>
         <Tooltip.Trigger>
           {#snippet child({ props })}
             <Sidebar.MenuButton
@@ -261,6 +262,7 @@
                   open = true;
                 },
               })}
+              onfocus={undefined}
               aria-label={label}
               data-testid="app-update-row"
             >
