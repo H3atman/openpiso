@@ -1200,6 +1200,8 @@ export interface AppUpdateState {
   rollbacks: AppUpdateRelease[];
   runningSessionCount: number;
   download?: { targetVersion: string; percent: number };
+  /** A downloaded, verified installer waiting for the Owner's restart. */
+  ready?: { targetVersion: string; rollback: boolean };
   lastResult?: { from: string; to: string; ok: boolean };
 }
 

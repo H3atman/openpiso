@@ -178,8 +178,10 @@ The production tag must carry the permanent production public key and feed.
 - [ ] For a schema increase, Install is refused without acknowledgement and works
       with it. Afterward, different-schema releases are absent from Compatible Rollback.
       For same-schema updates, no schema acknowledgement is required.
-- [ ] Install the **real signed candidate EXE** through the panel. Observe kiosk
-      hide, passive progress, no UAC, Admin close and automatic relaunch; kiosk returns.
+- [ ] Download the **real signed candidate EXE** through the panel and confirm the
+      Admin keeps running until **Restart and install**. Then click it: observe kiosk
+      hide, passive progress, no UAC, Admin close and automatic relaunch; kiosk returns,
+      and the panel shows "Waiting for the Admin to restart" with no error.
 - [ ] Confirm the bundled web admin changed too, SQLite records and remaining paid
       time survive, Clients briefly lock and reconnect before Offline Shutdown Countdown
       expires, and Owner sees the success toast.

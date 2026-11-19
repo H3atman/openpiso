@@ -117,7 +117,7 @@ export async function verifyAppUpdate(
   await press("Install");
   check(
     "App Update: schema acknowledgement blocks install",
-    !(await evaluate<boolean>(enabled("Install and restart"))),
+    !(await evaluate<boolean>(enabled("Download update"))),
   );
   check(
     "App Update: schema warning shown",
@@ -132,7 +132,7 @@ export async function verifyAppUpdate(
   await screenshot("update-4-schema-gate.png");
   await click(`${panel} input[type="checkbox"]`);
   await waitFor(
-    enabled("Install and restart"),
+    enabled("Download update"),
     "schema acknowledgement enables install",
   );
   check("App Update: schema acknowledgement enables install", true);
@@ -158,25 +158,25 @@ export async function verifyAppUpdate(
   await press(`Roll back to v${fixture.compatible}`);
   check(
     "App Update: empty typed confirmation blocks rollback",
-    !(await evaluate<boolean>(enabled("Roll back and restart"))),
+    !(await evaluate<boolean>(enabled("Download rollback"))),
   );
   await typeInto("#app-update-confirm-version", `v${fixture.compatible}`);
   check(
     "App Update: mismatched typed confirmation blocks rollback",
-    !(await evaluate<boolean>(enabled("Roll back and restart"))),
+    !(await evaluate<boolean>(enabled("Download rollback"))),
   );
   await evaluate(
-    `(${button("Roll back and restart")}).scrollIntoView({block:'center'}), true`,
+    `(${button("Download rollback")}).scrollIntoView({block:'center'}), true`,
   );
   await screenshot("update-5-rollback-gate.png");
   await typeInto("#app-update-confirm-version", fixture.compatible);
   await waitFor(
-    enabled("Roll back and restart"),
+    enabled("Download rollback"),
     "exact typed confirmation enables rollback",
   );
   check("App Update: exact typed confirmation enables rollback", true);
   await evaluate(
-    `(${button("Roll back and restart")}).scrollIntoView({block:'center'}), true`,
+    `(${button("Download rollback")}).scrollIntoView({block:'center'}), true`,
   );
   await screenshot("update-6-rollback-confirmed.png");
   await press("Cancel rollback");

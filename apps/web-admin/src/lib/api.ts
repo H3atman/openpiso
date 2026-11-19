@@ -971,6 +971,12 @@ export function installAppUpdate(input: {
   });
 }
 
+/** Hands the `ready` installer off. On success the Admin exits mid-request,
+ *  so callers expect a network error rather than a response. */
+export function restartAppUpdate(): Promise<AppUpdateState> {
+  return request<AppUpdateState>("/web-admin/update/restart", { method: "POST" });
+}
+
 // ---------------------------------------------------------------------------
 // Theme (ADR-0035)
 // ---------------------------------------------------------------------------

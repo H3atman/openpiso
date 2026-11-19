@@ -81,7 +81,8 @@
   });
 
   // GET never checks the Release Feed. Keep download progress live while the
-  // install POST waits; outside the panel, use the shell's 15-second cadence.
+  // install POST waits, and watch for the restarted Admin; outside the panel,
+  // use the shell's 15-second cadence.
   $effect(() => {
     const interval =
       open || installing || awaitingRestart || update?.download
@@ -148,6 +149,12 @@
       loadError = "";
     } catch (error) {
       if (requestGeneration !== generation) return;
+      if (awaitingRestart) {
+        // The installer closes the Admin; the relaunched one has no Owner
+        // Session, so its first 401 means the restart happened.
+        if (error instanceof api.UnauthenticatedError) location.reload();
+        return;
+      }
       loadError = error instanceof Error ? error.message : String(error);
     } finally {
       reading = false;
@@ -188,14 +195,32 @@
       } else {
         confirmInstall = false;
       }
-      awaitingRestart = !next.lastResult;
-      toast.success(
-        `${rollback ? "Compatible Rollback" : "App Update"} prepared. The Admin is restarting.`,
-      );
+      toast.success(`v${version} is ready. Restart the Admin to install it.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       installing = false;
+    }
+  }
+
+  // A successful handoff exits the Admin before it responds, so a request
+  // that never got an HTTP response is the restart, not a failure.
+  async function restart() {
+    if (!update?.ready || busy) return;
+    awaitingRestart = true;
+    try {
+      publish(await api.restartAppUpdate());
+    } catch (error) {
+      if (
+        !(
+          error instanceof api.ApiError ||
+          error instanceof api.UnauthenticatedError ||
+          error instanceof api.ThrottledError
+        )
+      )
+        return;
+      awaitingRestart = false;
+      toast.error(error.message);
     }
   }
 
@@ -321,10 +346,7 @@
           class="w-full"
         ></progress>
       {:else if installing}
-        <p role="status">
-          Preparing the signed installer. The Admin will restart after
-          verification.
-        </p>
+        <p role="status">Downloading and verifying the signed installer.</p>
       {/if}
       {#if update && update.runningSessionCount > 0}
         <p role="note">
@@ -332,6 +354,14 @@
           During the restart, Clients return to the Fullscreen Lock under the Offline
           Shutdown Countdown and resume on reconnect.
         </p>
+      {/if}
+      {#if update?.ready && !awaitingRestart}
+        <p>v{update.ready.targetVersion} is downloaded and verified.</p>
+        <Button onclick={restart} disabled={busy}
+          >{update.ready.rollback
+            ? "Restart and roll back"
+            : "Restart and install"}</Button
+        >
       {/if}
       {#if awaitingRestart && !update?.download}
         <p role="status">
@@ -342,8 +372,13 @@
       {#if update?.available}
         <h3>v{update.available.version}</h3>
         <ReleaseNotes notes={update.available.notes} />
-        {#if confirmInstall}
-          <p>Install v{update.available.version} and restart the Admin?</p>
+        {#if update.ready && !update.ready.rollback && update.ready.targetVersion === update.available.version}
+          <!-- Downloaded: the restart control above replaces these. -->
+        {:else if confirmInstall}
+          <p>
+            Download v{update.available.version}? The Admin keeps running until
+            you restart it.
+          </p>
           {#if update.available.raisesSchema}
             <p class="text-destructive">
               This App Update raises the Schema Version. You cannot roll back
@@ -360,7 +395,7 @@
             </label>
           {/if}
           <Button onclick={() => installOrRollback(false)} disabled={!canInstall}
-            >Install and restart</Button
+            >Download update</Button
           >
           <Button
             variant="outline"
@@ -394,11 +429,14 @@
               <section class="flex flex-col gap-3">
                 <h3>v{release.version}</h3>
                 <ReleaseNotes notes={release.notes} />
-                {#if rollbackVersion === release.version}
+                {#if update.ready?.rollback && update.ready.targetVersion === release.version}
+                  <!-- Downloaded: the restart control above replaces these. -->
+                {:else if rollbackVersion === release.version}
                   <p role="alert" class="text-destructive">
-                    Compatible Rollback replaces the Admin with an older release
-                    and restarts the shop server. Features and fixes from newer
-                    releases will be unavailable.
+                    Compatible Rollback replaces the Admin with an older
+                    release. The shop server restarts when you click Restart
+                    and roll back. Features and fixes from newer releases will
+                    be unavailable.
                   </p>
                   <label for="app-update-confirm-version"
                     >Type {release.version} to confirm</label
@@ -412,7 +450,7 @@
                   <Button
                     variant="destructive"
                     onclick={() => installOrRollback(true)}
-                    disabled={!canRollback}>Roll back and restart</Button
+                    disabled={!canRollback}>Download rollback</Button
                   >
                   <Button
                     variant="outline"
