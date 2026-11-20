@@ -160,7 +160,7 @@ boundary.
 
 ## Bench testing (v1)
 
-1. Plug in the serial adapter. In `:8080/admin` → coin-device settings,
+1. Connect the acceptor to the server PC's COM header. In `:8080/admin` → coin-device settings,
    press **Refresh**, select the port that appeared, then configure the
    set/coin line mapping, gap, and pulse map. Save and use **Test acceptor**.
    The saved port remains selectable when temporarily unplugged and is shown
@@ -195,19 +195,41 @@ boundary.
 
 ## Conceptual wiring (electrical)
 
-Coin acceptors vary. Check the specific acceptor's datasheet before applying
-power. The coin pulse output and the inhibit/enable input typically run at the
-acceptor's logic level (often 12 V or 5 V), which must be level-shifted /
-optically isolated to the PC serial port's levels — do **not** wire acceptor
-voltages directly to COM-header pins.
+The supported, tested setup wires a 12 V pulse multi-coin acceptor **directly**
+to the Server PC's native motherboard COM header, with no isolation or level
+shifting. It is the topology recorded in
+[coin-acceptor-characterization.md](coin-acceptor-characterization.md) §2
+("Documented (belongs in the wiring diagram)"):
+
+- **Coin Pin = DSR**, read by the server.
+- **Set Pin = RTS**, driven by the server; RTS asserted enables the acceptor,
+  deasserted inhibits it.
+- **DTR is the pull-up**: tied to the same node as DSR and the acceptor's COIN
+  wire. The server asserts DTR on open (`assert_pullup_dtr`); without it the
+  Coin Pin floats and chatters.
+- **Common ground** across PC, acceptor, and the 12 V supply, which is the PC's
+  own PSU through a Molex connector.
+- Acceptor slide switches **N.O.** and **Slow**; **1 pulse per peso** taught
+  into the acceptor.
 
 ```text
-12 V supply +     ---- coin acceptor V+
-12 V supply -     ---- coin acceptor GND
-coin pulse output ---- isolation/level shift ---- COM status input (coin pin)
-COM control output ---- isolation/level shift ---- acceptor inhibit input (set pin)
-common ground only where the chosen interface requires it
+PSU Molex +12 V (yellow) ---- acceptor DC12V
+PSU Molex GND (black)    ---- acceptor GND
+acceptor COIN            ---+-- DSR (Coin Pin)
+                            +-- DTR (pull-up, asserted by the server)
+RTS (Set Pin)            ---- acceptor Set (one wire of the two-wire lead; the other is unused)
 ```
+
+The owner-facing wiring steps, with header pin numbers for a standard 2×5 COM
+header, are in the user guide: [Wire and set up the coin
+slot](guide/coin-slot-wiring.md) and its diagram
+[`guide/public/images/coin-slot-wiring.svg`](guide/public/images/coin-slot-wiring.svg).
+Those pin numbers still await confirmation on real hardware.
+
+Coin acceptors vary. This topology was measured on a CH-926-family unit whose
+Coin Pin idles at about +10 V; check any other acceptor's datasheet for its
+output and inhibit-input levels before applying power, and add isolation or
+level shifting only if they fall outside what a COM-header port tolerates.
 
 ---
 

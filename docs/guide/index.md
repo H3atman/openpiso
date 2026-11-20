@@ -27,7 +27,7 @@ features:
     details: You can run OpenPiso in your own Pisonet shop at no cost.
 ---
 
-<!-- SCREENSHOT: images/dashboard.png — Web Admin dashboard with several PCs and recent transactions -->
+![Web Admin dashboard for Demo Pisonet: today's sales, PCs In Use, the PC list with In Use, Online and Offline PCs, and Recent Transactions](/images/dashboard.png)
 
 ## What you need
 

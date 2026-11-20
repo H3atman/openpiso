@@ -64,6 +64,21 @@ export default defineConfig({
           { text: "Troubleshooting", link: "/troubleshooting" },
         ],
       },
+      {
+        text: "More features",
+        items: [
+          { text: "Accounts and Points", link: "/accounts-and-points" },
+          { text: "Vouchers", link: "/vouchers" },
+          { text: "Coin Promo", link: "/coin-promo" },
+          { text: "Attendance", link: "/attendance" },
+          { text: "Spin the Wheel", link: "/spin-the-wheel" },
+          { text: "Transfers", link: "/transfers" },
+          { text: "Telegram Alerts", link: "/telegram-alerts" },
+          { text: "PC Monitoring", link: "/pc-monitoring" },
+          { text: "Diskless setups", link: "/diskless" },
+          { text: "Kiosk hardening", link: "/kiosk-hardening" },
+        ],
+      },
     ],
   },
 });
