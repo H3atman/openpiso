@@ -754,6 +754,33 @@ If the integrity check fails, stop and do not start OpenPiso against that file.
 Do not use the `.db` companion as though it were a Catalog entry: it is a direct
 rollback artifact, not a Backup Kind.
 
+## Forgotten Web Admin PIN
+
+There is no in-app reset. Recovery is a credential wipe followed by first-time
+setup ([ADR-0050](adr/0050-web-admin-pin-rotation.md)). The new PIN also becomes
+the Owner PIN. On the server PC:
+
+1. Choose a time when no one is using a PC.
+2. Download the SQLite command-line tools for Windows from [sqlite.org/download.html](https://www.sqlite.org/download.html). Choose the file named **sqlite-tools-win-x64**. Unzip it, and find `sqlite3.exe` inside.
+3. On the Server PC, close the Central Terminal: press Ctrl+Alt+Delete and choose **Task Manager**. Find the Central Terminal in the list. It may show as **OpenPiso Central Terminal** or with your Shop Name. Select it, then click **End task**.
+4. Open the Windows Start menu, type `cmd`, and open **Command Prompt**. Use the same Windows account the Central Terminal runs under.
+5. Make a copy of your records first. Type this and press Enter:
+
+   ```text
+   copy "%APPDATA%\org.openpiso.admin\openpiso.db" "%APPDATA%\org.openpiso.admin\openpiso.db.before-pin-reset"
+   ```
+
+6. Remove the PIN. Replace `C:\path\to\sqlite3.exe` with where you unzipped `sqlite3.exe`, then press Enter:
+
+   ```text
+   "C:\path\to\sqlite3.exe" "%APPDATA%\org.openpiso.admin\openpiso.db" "DELETE FROM owner_credentials;"
+   ```
+
+7. Open **OpenPiso Central Terminal** from the Start menu.
+8. Open the Web Admin. It shows **First-time setup: create your Web Admin PIN to get started.** Create a new PIN.
+
+Your new PIN also becomes your Owner PIN for the PCs. All your other records stay as they were.
+
 ## Checksum recomputation (escape hatch only)
 
 Readable is not the same as editable. Restore refuses a hand-edited Backup when
