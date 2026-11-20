@@ -20,6 +20,12 @@ Switch off the Server PC and unplug its power cord before you touch any wire. Ke
 
 The diagram shows the COM header as most motherboards lay it out: two rows of pins, with pin 1 at the bottom left. The top row holds the even pins (2, 4, 6, 8) and one empty spot where pin 10 would be. The bottom row holds the odd pins (1, 3, 5, 7, 9).
 
+Here is the same wiring shown with the real parts, so you can see what each one looks like:
+
+![The same coin slot wiring shown with photos: the Server PC and its Molex power connector, the JCOM1 header on the motherboard, the coin slot, and close-ups of the two side switches set to NO and Slow](/images/coin-slot-wiring-photo.png)
+
+Use the first diagram for the pin numbers. The photo version does not number the pins.
+
 ## Set the two side switches
 
 The coin slot has two small slide switches on its side.
