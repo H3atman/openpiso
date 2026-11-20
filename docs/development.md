@@ -1,5 +1,16 @@
 # Development
 
+## Requirements
+
+- Bun, Rust stable, [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
+- Windows deployment: WebView2; C++ Build Tools for builds. Client Guard installation
+  requires administrator approval. Serial coin input needs a configured acceptor.
+- PCs on the same trusted LAN; do not expose Admin mutation endpoints publicly.
+
+Never commit signing keys or shop records.
+
+## Checks
+
 Install, then run every automated check from the repository root before
 finishing a change. CI's `check` job runs the same command:
 
@@ -181,14 +192,14 @@ and `release.json`. The Rust Installer selects that release's own `latest.json`,
 not a moving latest-release endpoint. No static updater endpoints or frontend
 updater permissions are configured.
 
-**TODO (#425):** before the first signed release, the maintainer must replace
-`plugins.updater.pubkey` in the Admin config with the generated minisign public
-key content. `TODO_REPLACE_WITH_MINISIGN_PUBLIC_KEY_SEE_DOCS_RELEASING` is an
-intentionally invalid placeholder, so verification fails closed. Keep the private
-key out of the repository; CI signing uses `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Follow the keypair, offline backup, secrets,
-and real Windows update/rollback/relaunch checklist in `docs/releasing.md`
-(added by #425). Authenticode is not part of this setup.
+`plugins.updater.pubkey` in the Admin config is the real upstream minisign
+public key (key ID `64BC1BEF3B637AB1`), not a placeholder. Forks must replace it
+with their own key before publishing. `bun run build:admin` enables updater
+artifacts and needs your own `TAURI_SIGNING_PRIVATE_KEY`; CI signing uses
+`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Keep the
+private key out of the repository. Follow the keypair, offline backup, secrets,
+and real Windows update/rollback/relaunch checklist in [releasing](releasing.md).
+Authenticode is not part of this setup.
 
 ## Release command
 

@@ -200,15 +200,7 @@ hardening guarantee.
 
 ### Client Guard installation (elevation requirement)
 
-Download `OpenPiso Client_X.Y.Z_x64-setup.exe` from the
-[latest release](https://github.com/H3atman/openpiso/releases/latest),
-transfer it to each customer PC, and install manually. Client and Guard are not
-auto-updated by Admin.
-
-Because the Client Guard is a Windows service, installing or uninstalling the
-Client **now requires elevation** (Run as Administrator). The NSIS installer
-shows a **UAC prompt** on launch. This is a change from earlier versions that
-did not need administrator privileges.
+Owner steps for installing and updating the Client: see [Install the Client and approve your PCs](guide/install-client.md) and [Updating](guide/updating.md#update-the-client-on-each-pc).
 
 The installer automatically:
 1. Copies `client-guard.exe` to
@@ -654,31 +646,11 @@ PC Monitoring and Telegram delivery behave truthfully across Admin downtime:
 
 ## Admin App Update (ADR-0086)
 
-Sign in to the web admin and select the version row above the Owner menu in
-its sidebar (on a phone, open the sidebar first). The row shows the installed
-Admin version or **Update available · vX.Y.Z**. Hover for a short summary; tap
-or click for release notes, **Check now**, last checked time, and automatic
-checks. Automatic checks default on at startup and every six hours; turning
-these off suppresses automatic outbound checks, not **Check now**.
+Owner steps for checking, installing and rolling back an App Update: see [Updating](guide/updating.md).
 
-**Install** asks for confirmation, then **Download update** downloads and
-verifies the signed installer while the Admin keeps running. A release that
-raises the **Schema Version** also requires **I understand**: returning below
-that boundary needs a Pre-Migration Backup restore. The panel shows download
-progress, then **Restart and install**; nothing restarts until you click it,
-so pick a quiet moment. Running PCs
-produce a count warning, not a block: paid time is preserved, Clients enter
-the Fullscreen Lock under the Offline Shutdown Countdown and resume when the
-Admin reconnects. Sign in again after the restart to see its success/failure
-toast; acknowledgement clears the restart result, not its Diagnostics history.
+Acknowledgement clears the restart result, not its Diagnostics history.
 Manifest, download and signature failures also stay in Diagnostics/Run Records,
 without a restart marker.
-
-Expand **Compatible Rollback** for older stable releases with the same Schema
-Version. Read the red warning and type the exact target version (no `v` prefix
-or spaces), then **Download rollback**, then **Restart and roll back**. Other
-Schema Versions are not offered. App
-Update covers Admin only, not Clients or Client Guard.
 
 ### Windows installer
 
@@ -688,9 +660,7 @@ installers with `currentUser` (no UAC), keeping the existing install path and
 HKCU Autostart registration. The installer runs in `passive` mode: the kiosk
 hides, a progress window appears, and Admin closes and relaunches automatically.
 
-Download [Admin and Client installers](https://github.com/H3atman/openpiso/releases/latest)
-from the public release. Client remains manual-install only and includes the
-Guard service (`perMachine`, UAC required); it is never installed by Admin App Update.
+Owner steps for downloading and installing: see [Download](guide/download.md), [Install the Central Terminal](guide/install-central-terminal.md) and [Install the Client](guide/install-client.md).
 
 Offline shops can still sideload the installer from `bun run build:installers`
 (no signing secrets needed), or transfer the published setup EXE from the public
@@ -783,6 +753,33 @@ OpenPiso.
 If the integrity check fails, stop and do not start OpenPiso against that file.
 Do not use the `.db` companion as though it were a Catalog entry: it is a direct
 rollback artifact, not a Backup Kind.
+
+## Forgotten Web Admin PIN
+
+There is no in-app reset. Recovery is a credential wipe followed by first-time
+setup ([ADR-0050](adr/0050-web-admin-pin-rotation.md)). The new PIN also becomes
+the Owner PIN. On the server PC:
+
+1. Choose a time when no one is using a PC.
+2. Download the SQLite command-line tools for Windows from [sqlite.org/download.html](https://www.sqlite.org/download.html). Choose the file named **sqlite-tools-win-x64**. Unzip it, and find `sqlite3.exe` inside.
+3. On the Server PC, close the Central Terminal: press Ctrl+Alt+Delete and choose **Task Manager**. Find the Central Terminal in the list. It may show as **OpenPiso Central Terminal** or with your Shop Name. Select it, then click **End task**.
+4. Open the Windows Start menu, type `cmd`, and open **Command Prompt**. Use the same Windows account the Central Terminal runs under.
+5. Make a copy of your records first. Type this and press Enter:
+
+   ```text
+   copy "%APPDATA%\org.openpiso.admin\openpiso.db" "%APPDATA%\org.openpiso.admin\openpiso.db.before-pin-reset"
+   ```
+
+6. Remove the PIN. Replace `C:\path\to\sqlite3.exe` with where you unzipped `sqlite3.exe`, then press Enter:
+
+   ```text
+   "C:\path\to\sqlite3.exe" "%APPDATA%\org.openpiso.admin\openpiso.db" "DELETE FROM owner_credentials;"
+   ```
+
+7. Open **OpenPiso Central Terminal** from the Start menu.
+8. Open the Web Admin. It shows **First-time setup: create your Web Admin PIN to get started.** Create a new PIN.
+
+Your new PIN also becomes your Owner PIN for the PCs. All your other records stay as they were.
 
 ## Checksum recomputation (escape hatch only)
 
@@ -899,16 +896,7 @@ For a post-release Attendance defect, use this rollback ladder:
 - [ ] `http://127.0.0.1:8080/admin` renders the login shell.
 - [ ] `POST /web-admin/setup` issues a cookie token and the
       dashboard loads with no PCs yet.
-- [ ] **Add each PC** (ADR-0090): install and launch the Client; it
-      finds the server by itself ("Looking for the OpenPiso server…"),
-      or lists the shops it found when there are several. Then approve
-      the PC in the web admin under Settings → PCs → Waiting for
-      approval, matching the code on its lock screen. Fallback:
-      **Enter address manually** on the lock screen and type the server's
-      LAN IP (`192.168.1.10`, `192.168.1.10:3210`, or the full
-      `http://192.168.1.10:3210`). Alternative (ADR-0031): pre-register a row
-      with the PC's static IP under Settings → PCs → Pre-register;
-      the first boot from that IP binds the row's MAC.
+- [ ] **Add each PC** (ADR-0090): see [Install the Client and approve your PCs](guide/install-client.md).
 - [ ] `POST /web-admin/coin-device/test` returns
       `{ ok: true, simulator: true, message: "No COM port
       configured; running on the simulator source." }`.

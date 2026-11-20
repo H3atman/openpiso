@@ -659,6 +659,13 @@ extends and persists the deadline; the PIN prompt alone does not pause it. Setup
 connecting, unregistered, and never-connected states never arm it. See
 [ADR-0045](adr/0045-offline-shutdown-countdown.md).
 
+### Server PC **(decided)**
+
+The one computer in the shop that runs the **Central Terminal**, holds the
+shop's records, and has the coin acceptor attached. It is not a **PC**: no
+customer rents it.
+_Avoid_: admin PC, main PC, host
+
 ### Central Terminal **(decided)**
 
 The single place coins enter the shop — there are no per-PC coin slots. The

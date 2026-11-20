@@ -23,10 +23,13 @@
     "check": "bun --filter '*' check",
     "verify": "cargo fmt --all --check && bun run check && bun test && bun run build:web-admin && bun run scripts/guard-stand-in.ts && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "check:windows": "bun run scripts/check-windows.ts",
-    "format": "bun --filter '*' format"
+    "format": "bun --filter '*' format",
+    "guide:dev": "vitepress dev docs/guide",
+    "guide:build": "vitepress build docs/guide"
   },
   "devDependencies": {
     "prettier": "^3.6.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitepress": "1.6.4"
   }
 }

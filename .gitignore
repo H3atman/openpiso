@@ -7,6 +7,10 @@ apps/*/src-tauri/gen/
 NUL
 tmp/
 
+# VitePress user guide build output and cache
+docs/guide/.vitepress/cache/
+docs/guide/.vitepress/dist/
+
 # Local SQLite databases
 *.db
 *.db-shm

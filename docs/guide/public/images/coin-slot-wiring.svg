@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="title">Coin slot wiring</title>
+  <desc id="desc">Wiring of a multi-coin slot to the Server PC. The Server PC power supply Molex connector gives 12 V: its yellow +12 V wire joins the coin slot's red DC12V wire, and its black wire goes to the coin slot GND. The coin slot's blue COIN wire splits in a Y connection to two pins of the motherboard COM header JCOM1: pin 4 (DTR), the pull-up, and pin 6 (DSR), the Coin Pin. The coin slot's Set lead has two wires: the green one goes to pin 7 (RTS), the Set Pin; the grey one is not used. The header is a 2 by 5 grid: bottom row pins 1 DCD, 3 TXD, 5 GND, 7 RTS, 9 RI; top row pins 2 RXD, 4 DTR, 6 DSR, 8 CTS, and pin 10 missing. On the coin slot, set the NO/NC switch to NO and the Fast/Medium/Slow switch to Slow. Pin numbers are for a standard 2 by 5 COM header; check your motherboard manual.</desc>
+
+  <!-- Opaque background so the drawing reads on light and dark site themes. -->
+  <rect x="0" y="0" width="800" height="1000" rx="16" fill="#ffffff"/>
+
+  <text x="40" y="52" font-size="28" font-weight="700" fill="#111827">Coin slot wiring</text>
+
+  <!-- Server PC -->
+  <g>
+    <rect x="40" y="80" width="200" height="170" rx="10" fill="#e5e7eb" stroke="#374151" stroke-width="3"/>
+    <rect x="62" y="98" width="70" height="120" rx="4" fill="#374151"/>
+    <line x1="74" y1="112" x2="120" y2="112" stroke="#9ca3af" stroke-width="3"/>
+    <line x1="74" y1="124" x2="120" y2="124" stroke="#9ca3af" stroke-width="3"/>
+    <line x1="74" y1="136" x2="120" y2="136" stroke="#9ca3af" stroke-width="3"/>
+    <circle cx="97" cy="196" r="7" fill="#60a5fa"/>
+    <text x="186" y="160" font-size="24" font-weight="700" fill="#111827" text-anchor="middle">Server</text>
+    <text x="186" y="190" font-size="24" font-weight="700" fill="#111827" text-anchor="middle">PC</text>
+  </g>
+
+  <!-- PC to Molex cable: yellow, black, black, red -->
+  <g fill="none" stroke-width="4">
+    <path d="M240 128 H330" stroke="#eab308"/>
+    <path d="M240 134 H330" stroke="#111827"/>
+    <path d="M240 140 H330" stroke="#111827"/>
+    <path d="M240 146 H330" stroke="#dc2626"/>
+  </g>
+
+  <!-- PSU Molex connector -->
+  <g>
+    <text x="395" y="100" font-size="18" font-weight="700" fill="#111827" text-anchor="middle">PSU Molex (12 V DC)</text>
+    <rect x="330" y="112" width="130" height="54" rx="8" fill="#f9fafb" stroke="#374151" stroke-width="3"/>
+    <circle cx="350" cy="139" r="8" fill="#eab308" stroke="#374151" stroke-width="2"/>
+    <circle cx="380" cy="139" r="8" fill="#111827" stroke="#374151" stroke-width="2"/>
+    <circle cx="410" cy="139" r="8" fill="#111827" stroke="#374151" stroke-width="2"/>
+    <circle cx="440" cy="139" r="8" fill="#dc2626" stroke="#374151" stroke-width="2"/>
+  </g>
+
+  <!-- 12 V: Molex yellow joins the coin slot's red DC12V wire -->
+  <path d="M350 166 V262" fill="none" stroke="#eab308" stroke-width="6" stroke-linecap="round"/>
+  <path d="M350 262 V355 H500" fill="none" stroke="#dc2626" stroke-width="6" stroke-linejoin="round"/>
+  <rect x="343" y="256" width="14" height="12" rx="2" fill="#6b7280"/>
+  <text x="340" y="214" font-size="17" fill="#111827" text-anchor="end">yellow</text>
+  <text x="340" y="234" font-size="17" fill="#111827" text-anchor="end">+12 V</text>
+
+  <!-- GND: Molex black to the coin slot GND, hopping over the blue COIN wire -->
+  <path d="M380 166 V383 A12 12 0 0 1 380 407 V435 H500" fill="none" stroke="#111827" stroke-width="6" stroke-linejoin="round"/>
+
+  <!-- COIN: blue, Y connection to pin 4 (pull-up) and pin 6 (Coin Pin) -->
+  <path d="M500 395 H176" fill="none" stroke="#2563eb" stroke-width="6"/>
+  <path d="M176 395 L144 456 M176 395 L208 456" fill="none" stroke="#2563eb" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="176" cy="395" r="7" fill="#2563eb"/>
+  <text x="176" y="378" font-size="18" font-style="italic" fill="#111827" text-anchor="middle">Y connection</text>
+
+  <!-- Wire colour names, so colour is never the only cue -->
+  <text x="490" y="345" font-size="18" fill="#b91c1c" text-anchor="end">red</text>
+  <text x="490" y="385" font-size="18" fill="#1d4ed8" text-anchor="end">blue</text>
+  <text x="490" y="425" font-size="18" fill="#111827" text-anchor="end">black</text>
+
+  <!-- Set lead: green to pin 7 (Set Pin), grey not used -->
+  <path d="M500 650 H272 V598" fill="none" stroke="#16a34a" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M500 676 H412" fill="none" stroke="#9ca3af" stroke-width="6"/>
+  <line x1="412" y1="668" x2="412" y2="684" stroke="#6b7280" stroke-width="3"/>
+  <text x="490" y="640" font-size="18" fill="#15803d" text-anchor="end">green</text>
+  <text x="402" y="682" font-size="18" font-weight="700" fill="#4b5563" text-anchor="end">grey: not used</text>
+
+  <!-- Motherboard COM header JCOM1: top row even pins, bottom row odd pins -->
+  <g>
+    <rect x="40" y="440" width="330" height="170" rx="10" fill="#e5e7eb" stroke="#374151" stroke-width="3"/>
+
+    <!-- top row: 2, 4, 6, 8, 10 -->
+    <circle cx="80" cy="470" r="18" fill="#111827"/>
+    <circle cx="144" cy="470" r="18" fill="#2563eb"/>
+    <circle cx="208" cy="470" r="18" fill="#2563eb"/>
+    <circle cx="272" cy="470" r="18" fill="#111827"/>
+    <circle cx="336" cy="470" r="17" fill="#e5e7eb" stroke="#6b7280" stroke-width="2" stroke-dasharray="5 4"/>
+    <g font-size="17" font-weight="700" text-anchor="middle" fill="#ffffff">
+      <text x="80" y="476">2</text>
+      <text x="144" y="476">4</text>
+      <text x="208" y="476">6</text>
+      <text x="272" y="476">8</text>
+    </g>
+    <text x="336" y="476" font-size="15" font-weight="700" text-anchor="middle" fill="#6b7280">10</text>
+    <g font-size="15" font-weight="700" text-anchor="middle" fill="#111827">
+      <text x="80" y="507">RXD</text>
+      <text x="144" y="507">DTR</text>
+      <text x="208" y="507">DSR</text>
+      <text x="272" y="507">CTS</text>
+    </g>
+    <text x="336" y="507" font-size="15" text-anchor="middle" fill="#4b5563">none</text>
+
+    <!-- bottom row: 1, 3, 5, 7, 9 -->
+    <g font-size="15" font-weight="700" text-anchor="middle" fill="#111827">
+      <text x="80" y="556">DCD</text>
+      <text x="144" y="556">TXD</text>
+      <text x="208" y="556">GND</text>
+      <text x="272" y="556">RTS</text>
+      <text x="336" y="556">RI</text>
+    </g>
+    <circle cx="80" cy="580" r="18" fill="#111827"/>
+    <circle cx="144" cy="580" r="18" fill="#111827"/>
+    <circle cx="208" cy="580" r="18" fill="#111827"/>
+    <circle cx="272" cy="580" r="18" fill="#16a34a"/>
+    <circle cx="336" cy="580" r="18" fill="#111827"/>
+    <g font-size="17" font-weight="700" text-anchor="middle" fill="#ffffff">
+      <text x="80" y="586">1</text>
+      <text x="144" y="586">3</text>
+      <text x="208" y="586">5</text>
+      <text x="272" y="586">7</text>
+      <text x="336" y="586">9</text>
+    </g>
+  </g>
+
+  <!-- Pin callouts -->
+  <text x="128" y="436" font-size="22" font-weight="700" fill="#1d4ed8" text-anchor="end">pull-up</text>
+  <text x="226" y="436" font-size="22" font-weight="700" fill="#1d4ed8">Coin Pin</text>
+  <text x="260" y="640" font-size="22" font-weight="700" fill="#15803d" text-anchor="end">Set Pin</text>
+
+  <text x="40" y="722" font-size="20" font-weight="700" fill="#111827">Motherboard COM header (JCOM1)</text>
+  <text x="40" y="746" font-size="17" fill="#374151">on the Server PC motherboard</text>
+
+  <!-- Coin slot -->
+  <g>
+    <rect x="500" y="320" width="240" height="380" rx="12" fill="#374151" stroke="#111827" stroke-width="3"/>
+    <rect x="736" y="300" width="30" height="420" rx="6" fill="#d1d5db" stroke="#374151" stroke-width="3"/>
+    <rect x="745" y="420" width="12" height="110" rx="4" fill="#111827"/>
+    <rect x="620" y="345" width="90" height="50" rx="4" fill="#111827"/>
+    <text x="665" y="381" font-size="28" font-weight="700" fill="#f87171" text-anchor="middle">8.8</text>
+
+    <!-- terminals -->
+    <circle cx="500" cy="355" r="7" fill="#fbbf24" stroke="#111827" stroke-width="2"/>
+    <circle cx="500" cy="395" r="7" fill="#fbbf24" stroke="#111827" stroke-width="2"/>
+    <circle cx="500" cy="435" r="7" fill="#fbbf24" stroke="#111827" stroke-width="2"/>
+    <circle cx="500" cy="650" r="7" fill="#fbbf24" stroke="#111827" stroke-width="2"/>
+    <circle cx="500" cy="676" r="7" fill="#fbbf24" stroke="#111827" stroke-width="2"/>
+    <g font-size="18" font-weight="700" fill="#ffffff">
+      <text x="516" y="361">DC12V</text>
+      <text x="516" y="401">COIN</text>
+      <text x="516" y="441">GND</text>
+      <text x="516" y="670">Set</text>
+    </g>
+
+    <!-- side switch markers -->
+    <circle cx="580" cy="540" r="20" fill="#374151" stroke="#f59e0b" stroke-width="4"/>
+    <text x="580" y="548" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+    <circle cx="660" cy="540" r="20" fill="#374151" stroke="#f97316" stroke-width="4"/>
+    <text x="660" y="548" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+    <text x="620" y="590" font-size="15" fill="#e5e7eb" text-anchor="middle">side switches</text>
+  </g>
+  <text x="620" y="734" font-size="22" font-weight="700" fill="#111827" text-anchor="middle">Coin slot</text>
+
+  <!-- Switch 1: NO / NC -->
+  <g>
+    <rect x="40" y="772" width="350" height="164" rx="12" fill="#fffbeb" stroke="#f59e0b" stroke-width="3"/>
+    <circle cx="70" cy="802" r="16" fill="#374151" stroke="#f59e0b" stroke-width="3"/>
+    <text x="70" y="809" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+    <text x="96" y="809" font-size="20" font-weight="700" fill="#111827">Switch NO / NC</text>
+    <rect x="66" y="832" width="28" height="74" rx="6" fill="#e5e7eb" stroke="#374151" stroke-width="2"/>
+    <rect x="68" y="834" width="24" height="34" rx="4" fill="#111827"/>
+    <text x="106" y="858" font-size="22" font-weight="700" fill="#111827">NO</text>
+    <text x="106" y="894" font-size="22" fill="#4b5563">NC</text>
+    <text x="370" y="882" font-size="28" font-weight="700" fill="#111827" text-anchor="end">Set to NO</text>
+  </g>
+
+  <!-- Switch 2: Fast / Medium / Slow -->
+  <g>
+    <rect x="410" y="772" width="350" height="164" rx="12" fill="#fff7ed" stroke="#f97316" stroke-width="3"/>
+    <circle cx="440" cy="802" r="16" fill="#374151" stroke="#f97316" stroke-width="3"/>
+    <text x="440" y="809" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+    <text x="466" y="809" font-size="20" font-weight="700" fill="#111827">Speed switch</text>
+    <rect x="436" y="826" width="28" height="98" rx="6" fill="#e5e7eb" stroke="#374151" stroke-width="2"/>
+    <rect x="438" y="892" width="24" height="30" rx="4" fill="#111827"/>
+    <text x="476" y="848" font-size="20" fill="#4b5563">Fast</text>
+    <text x="476" y="880" font-size="20" fill="#4b5563">Medium</text>
+    <text x="476" y="914" font-size="22" font-weight="700" fill="#111827">Slow</text>
+    <text x="742" y="882" font-size="28" font-weight="700" fill="#111827" text-anchor="end">Set to Slow</text>
+  </g>
+
+  <text x="400" y="972" font-size="16" fill="#374151" text-anchor="middle">Pin numbers shown for a standard 2×5 COM header. Check your motherboard manual.</text>
+</svg>

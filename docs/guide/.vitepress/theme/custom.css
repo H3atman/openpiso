@@ -1,0 +1,14 @@
+/* Brand green from the Web Admin's --primary token (packages/ui/src/theme.css). */
+:root {
+  --vp-c-brand-1: oklch(0.448 0.119 151.328);
+  --vp-c-brand-2: oklch(0.527 0.154 150.069);
+  --vp-c-brand-3: oklch(0.527 0.154 150.069);
+  --vp-c-brand-soft: oklch(0.527 0.154 150.069 / 0.14);
+}
+
+.dark {
+  --vp-c-brand-1: oklch(0.792 0.209 151.711);
+  --vp-c-brand-2: oklch(0.723 0.219 149.579);
+  --vp-c-brand-3: oklch(0.448 0.119 151.328);
+  --vp-c-brand-soft: oklch(0.527 0.154 150.069 / 0.16);
+}

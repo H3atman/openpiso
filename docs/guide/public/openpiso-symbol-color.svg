@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">OpenPiso symbol</title>
+  <g id="symbol" transform="translate(4 -2)" fill="#123c1c">
+    <path id="frame" d="M150 40H58A44 44 0 0 0 14 84V172A44 44 0 0 0 58 216H150A12 12 0 0 0 162 204V184A12 12 0 0 0 150 172H74A20 20 0 0 1 54 152V104A20 20 0 0 1 74 84H150A12 12 0 0 0 162 72V52A12 12 0 0 0 150 40Z"/>
+    <path id="module" d="M198 84H218A20 20 0 0 1 238 104V152A20 20 0 0 1 218 172H198A12 12 0 0 1 186 160V96A12 12 0 0 1 198 84Z"/>
+  </g>
+</svg>

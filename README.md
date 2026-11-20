@@ -1,51 +1,46 @@
 # OpenPiso
 
-Local-first LAN coinslot and session control for Pisonet shops. Rust owns money,
-time, sessions, and SQLite; shop operation does not require cloud services.
+OpenPiso runs a Pisonet shop: customers drop coins in a coin slot and get time
+on a rental PC. Everything runs on your shop's own network, on Windows
+computers you already have. You do not need internet to run the shop.
 
-- **Admin** — Central Terminal, coin input, database, timers, LAN API (`:3210`).
-- **Web admin** — owner dashboard served by Admin (`:8080/admin`).
-- **Client** — per-PC timer, heartbeat, lock screen; Windows Client Guard service.
+![Web Admin dashboard for Demo Pisonet: today's sales, PCs In Use, the PC list with In Use, Online and Offline PCs, and Recent Transactions](docs/guide/public/images/dashboard.png)
 
-[Download Windows installers](https://github.com/H3atman/openpiso/releases/latest).
-Admin supports signed, owner-initiated updates; Client installation is manual.
+## What you need
 
-## License
+- One Windows computer as the **Server PC**, with a COM header on the motherboard.
+- An Allan or generic multi-coin slot, powered from the Server PC.
+- Your rental PCs, running Windows.
+- A router or switch that connects them all.
+- A phone or computer to open the **Web Admin**.
 
-[PolyForm Shield 1.0.0](LICENSE): source-available, **not OSI open source**.
-Free to use, including running a shop, and to inspect/adapt for permitted purposes.
-No providing competing products, including selling/reselling it as a competing
-substitute. The full license controls, including its exceptions.
-See [third-party notices](THIRD-PARTY-NOTICES.md).
+Full list: [What you need](https://h3atman.github.io/openpiso/what-you-need).
 
-## Requirements
+## Quick start
 
-- Bun, Rust stable, [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
-- Windows deployment: WebView2; C++ Build Tools for builds. Client Guard installation
-  requires administrator approval. Serial coin input needs a configured acceptor.
-- PCs on the same trusted LAN; do not expose Admin mutation endpoints publicly.
+1. **Download both installers** from the
+   [latest release page](https://github.com/H3atman/openpiso/releases/latest).
+   The file whose name contains **Central Terminal** goes on the Server PC. The
+   file whose name contains **Client** goes on every rental PC.
+   [Download guide](https://h3atman.github.io/openpiso/download)
+2. **Install the Central Terminal on the Server PC**, open the Web Admin from
+   your phone, and create your Web Admin PIN.
+   [Install the Central Terminal](https://h3atman.github.io/openpiso/install-central-terminal)
+3. **Wire and test the coin slot.**
+   [Wire the coin slot](https://h3atman.github.io/openpiso/coin-slot-wiring) ·
+   [Connect and test it](https://h3atman.github.io/openpiso/coin-slot-settings)
+4. **Install the Client on each PC** and approve it in the Web Admin.
+   [Install the Client](https://h3atman.github.io/openpiso/install-client)
+5. **Set your Shop Rate** and Shop Hours.
+   [Shop Rate and Shop Hours](https://h3atman.github.io/openpiso/shop-rate-and-hours)
 
-## Develop / build
+## Full guide
 
-```bash
-bun install --frozen-lockfile
-bun run dev:admin        # builds web admin, then starts Admin
-bun run dev:client       # separate terminal; point Client at Admin's LAN address
-bun run dev:web-admin    # optional owner UI hot reload
-bun run check
-bun run build:web-admin
-bun run build:installers # Windows NSIS installers; no updater signing secrets
-```
+Read the [OpenPiso setup guide](https://h3atman.github.io/openpiso/).
 
-`bun run build:admin` enables updater artifacts and needs your own
-`TAURI_SIGNING_PRIVATE_KEY`; see [releasing](docs/releasing.md) for signed builds
-and fork configuration. On non-Windows hosts, installer builds use cargo-xwin.
-Never commit signing keys or shop records.
+## Developing
 
-Telemetry is compiled in only when the builder supplies their own
-`OPENPISO_POSTHOG_TOKEN`. Plain builds send nothing. Token-bearing builds send
-anonymous daily Admin summaries; details in [development](docs/development.md)
-and [ADR-0083](docs/adr/0083-install-telemetry.md).
+See [Development](docs/development.md).
 
 ## Documentation
 
@@ -55,3 +50,11 @@ and [ADR-0083](docs/adr/0083-install-telemetry.md).
 [Glossary](docs/glossary.md) · [Decisions](docs/adr/README.md)
 
 [Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md)
+
+## License
+
+[PolyForm Shield 1.0.0](LICENSE): source-available, **not OSI open source**.
+Free to use, including running a shop, and to inspect/adapt for permitted purposes.
+No providing competing products, including selling/reselling it as a competing
+substitute. The full license controls, including its exceptions.
+See [third-party notices](THIRD-PARTY-NOTICES.md).
