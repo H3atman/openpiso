@@ -5,10 +5,13 @@
   import * as Chart from "$lib/components/ui/chart/index.js";
   import { formatMoney, formatMoneyCompact, formatReportDate } from "../format";
   import type { DailySalesPoint } from "../types";
+  import type { SalesBucket } from "../salesRange";
 
   interface Props {
     points: readonly DailySalesPoint[];
     caption: string;
+    /** What one bar covers; day bars are labelled by date, others by their start. */
+    bucket?: SalesBucket;
   }
 
   interface ChartPoint {
@@ -17,7 +20,10 @@
     voucher_cents: number;
   }
 
-  let { points, caption }: Props = $props();
+  let { points, caption, bucket = "day" }: Props = $props();
+
+  const BUCKET_WORD = { day: "Daily", week: "Weekly", month: "Monthly" } as const;
+  const BUCKET_NOUN = { day: "day", week: "week", month: "month" } as const;
 
   /** Coin Sales and Voucher Sales, stacked so the top edge is Cash Revenue. */
   const chartConfig = {
@@ -64,8 +70,10 @@
     return typeof value === "number" ? formatMoney(value) : "";
   }
 
-  function dayLabel(value: Date): string {
-    return String(value.getUTCDate());
+  function axisLabel(value: Date): string {
+    if (bucket === "day") return String(value.getUTCDate());
+    const month = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(value);
+    return bucket === "week" ? `${month} ${value.getUTCDate()}` : `${month} ${value.getUTCFullYear()}`;
   }
 
   let hasSales = $derived(points.some((point) => totalCents(point) > 0));
@@ -77,10 +85,13 @@
     })),
   );
   let axisMax = $derived(niceMax(Math.max(0, ...points.map(totalCents))));
+  // Day bars tick every fifth date; week and month bars tick at most ~12 times.
   let xTicks = $derived(
-    chartData
-      .filter((point) => point.date.getUTCDate() % 5 === 1)
-      .map((point) => point.date),
+    bucket === "day"
+      ? chartData.filter((point) => point.date.getUTCDate() % 5 === 1).map((point) => point.date)
+      : chartData
+          .filter((_, index) => index % Math.ceil(chartData.length / 12) === 0)
+          .map((point) => point.date),
   );
   let peak = $derived.by(() => {
     let best = points[0] ?? null;
@@ -124,11 +135,11 @@
 {/snippet}
 
 {#if !hasSales}
-  <!-- Same footprint as the plot, so switching months does not jump the page. -->
+  <!-- Same footprint as the plot, so switching ranges does not jump the page. -->
   <div
     class="text-muted-foreground flex h-[12.5rem] items-center justify-center rounded-md border border-dashed text-sm md:h-[15rem]"
   >
-    <p>No sales recorded for this month.</p>
+    <p>No sales recorded for this range.</p>
   </div>
 {:else}
   <figure class="m-0">
@@ -138,7 +149,7 @@
         class="mb-3 flex min-h-5 flex-wrap items-baseline gap-x-2 text-sm"
       >
         <span class="text-muted-foreground"
-          >Best day · {formatReportDate(peak.date)}</span
+          >Best {BUCKET_NOUN[bucket]} · {formatReportDate(peak.date)}</span
         >
         <span class="font-semibold tabular-nums">{formatMoney(totalCents(peak))}</span>
       </div>
@@ -148,7 +159,7 @@
       config={chartConfig}
       class="aspect-auto h-[10.75rem] w-full md:h-[13.75rem]"
       role="img"
-      aria-label="Daily sales for {caption}"
+      aria-label="{BUCKET_WORD[bucket]} sales for {caption}"
     >
       <AreaChart
         data={chartData}
@@ -177,7 +188,7 @@
             line: { class: "stroke-2" },
             motion: "tween",
           },
-          xAxis: { format: dayLabel, ticks: xTicks },
+          xAxis: { format: axisLabel, ticks: xTicks },
           yAxis: { format: formatMoneyCompact, ticks: 4 },
         }}
       >
@@ -193,7 +204,7 @@
 
     <div class="sr-only">
       <table>
-        <caption>Daily sales for {caption}</caption>
+        <caption>{BUCKET_WORD[bucket]} sales for {caption}</caption>
         <thead>
           <tr>
             <th scope="col">Date</th>

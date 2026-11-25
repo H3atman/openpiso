@@ -74,7 +74,7 @@ describe("DailySalesChart", () => {
   it("reports an empty state instead of an empty plot", () => {
     const view = renderChart({ points: [] });
 
-    expect(view.getByText("No sales recorded for this month.")).toBeTruthy();
+    expect(view.getByText("No sales recorded for this range.")).toBeTruthy();
     expect(view.queryByRole("img")).toBeNull();
   });
 
@@ -86,7 +86,7 @@ describe("DailySalesChart", () => {
       ],
     });
 
-    expect(view.getByText("No sales recorded for this month.")).toBeTruthy();
+    expect(view.getByText("No sales recorded for this range.")).toBeTruthy();
     expect(view.queryByRole("img")).toBeNull();
   });
 

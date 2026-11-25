@@ -6330,6 +6330,72 @@ mod tests {
         assert_eq!(labels, ["2025-12", "2026-01"]);
     }
 
+    /// An inclusive From–To range keeps every event whose Admin-local date is in
+    /// it, including one in the last UTC second before local midnight, and
+    /// refuses a reversed or malformed range instead of returning nothing (#37).
+    #[tokio::test]
+    async fn report_summary_range_is_inclusive_by_local_date_and_validated() {
+        use chrono::{Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
+
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "range-pin").await;
+        let auth = |request: reqwest::RequestBuilder| request.owner(&token);
+
+        // Local midnight starting 2024-03-11, as a UTC instant: the event one
+        // second earlier is the last second of local 2024-03-10 whatever the
+        // host time zone is.
+        let midnight = Local
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 3, 11)
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .expect("valid date"),
+            )
+            .earliest()
+            .expect("local midnight exists")
+            .with_timezone(&Utc);
+        let stamp = |instant: chrono::DateTime<Utc>| instant.to_rfc3339_opts(SecondsFormat::Secs, true);
+        for (id, amount_cents, created_at) in [
+            ("range-last-second", 100, stamp(midnight - Duration::seconds(1))),
+            ("range-first-second", 200, stamp(midnight)),
+        ] {
+            sqlx::query(
+                "INSERT INTO audit_log
+                 (id, event_type, outcome, actor, amount_cents, cash_flag, summary, created_at)
+                 VALUES (?, 'coin_accepted', 'success', 'system', ?, 1, 'fixture', ?)",
+            )
+            .bind(id)
+            .bind(amount_cents)
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .expect("range fixture should insert");
+        }
+
+        let summary = |from: &str, to: &str| {
+            let request = auth(client.post(format!("http://{address}/web-admin/reports/summary")))
+                .json(&serde_json::json!({ "period": "day", "from_date": from, "to_date": to }));
+            async move { request.send().await.expect("summary should complete") }
+        };
+        let total = |response: reqwest::Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.json::<serde_json::Value>().await.expect("summary JSON");
+            body["cash_revenue_cents"].as_i64().expect("total")
+        };
+
+        assert_eq!(total(summary("2024-03-10", "2024-03-10").await).await, 100);
+        assert_eq!(total(summary("2024-03-11", "2024-03-11").await).await, 200);
+        assert_eq!(total(summary("2024-03-10", "2024-03-11").await).await, 300);
+        assert_eq!(total(summary("2024-03-12", "2024-03-20").await).await, 0);
+
+        let reversed = summary("2024-03-11", "2024-03-10").await;
+        assert_eq!(reversed.status(), StatusCode::BAD_REQUEST);
+        let malformed = summary("2024-3-1", "2024-03-10").await;
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn account_list_derives_last_login_and_preserves_it_for_deleted_accounts() {
         let state = test_state().await;
