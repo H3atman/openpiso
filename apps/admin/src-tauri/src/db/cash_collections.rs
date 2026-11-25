@@ -77,17 +77,21 @@ async fn cash_on_hand_kind(
         collected_at,
     });
     Ok(CashOnHandKind {
-        uncollected_cents: uncollected_cents(conn, kind).await?,
+        uncollected_cents: uncollected_cents(conn, kind).await?.max(0),
         last_collection,
     })
 }
 
 /// The Cash on hand panel's read. Independent of any report range.
 pub async fn cash_on_hand(pool: &SqlitePool) -> AppResult<CashOnHand> {
-    let mut conn = pool.acquire().await?;
+    // One read transaction: both kinds' sales and collections share a snapshot.
+    let mut tx = pool.begin().await?;
+    let coin_box = cash_on_hand_kind(&mut tx, CashCollectionKind::CoinBox).await?;
+    let voucher_cash = cash_on_hand_kind(&mut tx, CashCollectionKind::VoucherCash).await?;
+    tx.commit().await?;
     Ok(CashOnHand {
-        coin_box: cash_on_hand_kind(&mut conn, CashCollectionKind::CoinBox).await?,
-        voucher_cash: cash_on_hand_kind(&mut conn, CashCollectionKind::VoucherCash).await?,
+        coin_box,
+        voucher_cash,
     })
 }
 

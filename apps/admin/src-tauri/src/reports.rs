@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::BTreeMap};
 
-use chrono::{Datelike, Duration, Local, NaiveDateTime, TimeZone, Utc};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use openpiso_core::report::{category_for_event_type, AuditCategory, ReportPeriod, SalesKind};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
@@ -30,22 +30,9 @@ fn validate_date_range(from_date: Option<&str>, to_date: Option<&str>) -> AppRes
     Ok(())
 }
 
+/// A real calendar date written as YYYY-MM-DD (zero-padded).
 fn is_iso_date(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() != 10 {
-        return false;
-    }
-    let separators = [4usize, 7];
-    for (index, byte) in bytes.iter().enumerate() {
-        if separators.contains(&index) {
-            if byte != &b'-' {
-                return false;
-            }
-        } else if !byte.is_ascii_digit() {
-            return false;
-        }
-    }
-    true
+    value.len() == 10 && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
 }
 
 fn clamp_limit(value: Option<i64>, default: i64, max: i64) -> i64 {
@@ -112,6 +99,34 @@ pub(crate) async fn sales_total_cents(
     Ok(sqlx::query_scalar(&sql).fetch_one(conn).await?)
 }
 
+/// Coin and Voucher sales per bucket from one scan of `report_cash_revenue`,
+/// so both halves come from the same snapshot.
+async fn sales_buckets(
+    pool: &SqlitePool,
+    bucket: &str,
+    from_date: Option<&str>,
+    to_date: Option<&str>,
+) -> AppResult<Vec<(String, i64, i64)>> {
+    let mut query = QueryBuilder::<Sqlite>::new("SELECT ");
+    query.push(bucket);
+    query.push(" AS period_label, COALESCE(SUM(");
+    query.push(sales_kind_amount(SalesKind::Coin));
+    query.push("), 0), COALESCE(SUM(");
+    query.push(sales_kind_amount(SalesKind::Voucher));
+    query.push("), 0) FROM report_cash_revenue WHERE 1=1");
+    if let Some(from) = from_date {
+        query.push(" AND business_date >= ").push_bind(from.to_owned());
+    }
+    if let Some(to) = to_date {
+        query.push(" AND business_date <= ").push_bind(to.to_owned());
+    }
+    query.push(" GROUP BY period_label ORDER BY period_label");
+    Ok(query
+        .build_query_as::<(String, i64, i64)>()
+        .fetch_all(pool)
+        .await?)
+}
+
 /// Returns the unified report summary across the selected period and date
 /// range. Cash Revenue (split into Coin Sales and Voucher Sales) and Free Time
 /// Dispensed are read from the canonical audit_log views so the totals
@@ -129,8 +144,7 @@ pub async fn report_summary(
         report_view_buckets(pool, view, &sum, bucket, from_date, to_date).await
     };
 
-    let coin = buckets_of("report_cash_revenue", sales_kind_amount(SalesKind::Coin)).await?;
-    let voucher = buckets_of("report_cash_revenue", sales_kind_amount(SalesKind::Voucher)).await?;
+    let sales = sales_buckets(pool, bucket, from_date, to_date).await?;
     let free_time = buckets_of("report_free_time_dispensed", "seconds_delta".to_owned()).await?;
     let points_minted = buckets_of(
         "report_points_minted_by_wheel",
@@ -141,6 +155,19 @@ pub async fn report_summary(
     // Merge the bucket sets into one list ordered by label. A label present in
     // any set gets a single bucket with values from all of them.
     let mut merged: BTreeMap<String, ReportBucket> = BTreeMap::new();
+    for (label, coin, voucher) in sales {
+        merged.insert(
+            label.clone(),
+            ReportBucket {
+                period_label: label,
+                coin_sales_cents: coin,
+                voucher_sales_cents: voucher,
+                cash_revenue_cents: coin + voucher,
+                free_time_dispensed_seconds: 0,
+                points_minted_by_wheel_centi: 0,
+            },
+        );
+    }
     let mut add = |rows: Vec<(String, i64)>, apply: fn(&mut ReportBucket, i64)| {
         for (label, value) in rows {
             let bucket = merged.entry(label.clone()).or_insert_with(|| ReportBucket {
@@ -154,14 +181,6 @@ pub async fn report_summary(
             apply(bucket, value);
         }
     };
-    add(coin, |b, v| {
-        b.coin_sales_cents = v;
-        b.cash_revenue_cents += v;
-    });
-    add(voucher, |b, v| {
-        b.voucher_sales_cents = v;
-        b.cash_revenue_cents += v;
-    });
     add(free_time, |b, v| b.free_time_dispensed_seconds = v);
     add(points_minted, |b, v| b.points_minted_by_wheel_centi = v);
     let buckets: Vec<ReportBucket> = merged.into_values().collect();

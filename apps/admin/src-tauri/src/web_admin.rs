@@ -6569,6 +6569,30 @@ mod tests {
         assert_eq!(reversed.status(), StatusCode::BAD_REQUEST);
         let malformed = summary("2024-3-1", "2024-03-10").await;
         assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+        // Well-formed but not a real calendar date.
+        let impossible = summary("2026-02-31", "2026-03-10").await;
+        assert_eq!(impossible.status(), StatusCode::BAD_REQUEST);
+        let pc_sales = auth(client.post(format!("http://{address}/web-admin/reports/pc-sales")))
+            .json(&serde_json::json!({ "from_date": "2026-03-01", "to_date": "2026-02-31" }))
+            .send()
+            .await
+            .expect("pc sales should complete");
+        assert_eq!(pc_sales.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Uncollected never goes negative, even if collections exceed sales.
+    #[tokio::test]
+    async fn cash_on_hand_never_reports_negative_uncollected() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        seed_cash_row(&pool, "neg-coin", "coin_accepted", 100).await;
+        sqlx::query("INSERT INTO cash_collections (id, kind, amount_cents) VALUES ('neg-c', 'coin_box', 500)")
+            .execute(&pool)
+            .await
+            .expect("collection fixture should insert");
+        let on_hand = db::cash_on_hand(&pool).await.expect("cash on hand");
+        assert_eq!(on_hand.coin_box.uncollected_cents, 0);
+        assert_eq!(on_hand.voucher_cash.uncollected_cents, 0);
     }
 
     /// Inserts one Cash Revenue audit row (the report view's source of truth).
