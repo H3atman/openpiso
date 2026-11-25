@@ -17,6 +17,7 @@
     VoucherBatchDetail,
     VoucherBatchSummary,
     VoucherTemplate,
+    VoucherTemplateInput,
   } from "../types";
   import { reportActionFailure, reportActionSuccess } from "../notifications";
   import ResponsiveRows from "../components/ResponsiveRows.svelte";
@@ -87,6 +88,10 @@
   let economySettings = $state<EconomySettings | null>(null);
   let templateHtml = $state("");
   let templateCss = $state("");
+  let templateScript = $state("");
+  // The Template Script as of the last Run click; a fresh object per click so
+  // running the same text again re-renders. The preview never runs unrun text.
+  let scriptRun = $state<{ script: string } | null>(null);
   let templateBusy = $state(false);
   let previewFrame = $state<HTMLIFrameElement>();
   let previewStatus = $state<"rendering" | RenderResult["type"]>("rendering");
@@ -100,12 +105,19 @@
   >(() => {
     try {
       return {
-        srcdoc: buildVoucherDocument({ html: templateHtml, css: templateCss }, [
+        srcdoc: buildVoucherDocument(
           {
-            ...SAMPLE_VALUES,
-            shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
+            html: templateHtml,
+            css: templateCss,
+            script: scriptRun?.script,
           },
-        ]),
+          [
+            {
+              ...SAMPLE_VALUES,
+              shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
+            },
+          ],
+        ),
       };
     } catch (caught) {
       return { error: caughtMessage(caught) };
@@ -174,6 +186,7 @@
       voucherTemplate = results[3].value;
       templateHtml = results[3].value.html;
       templateCss = results[3].value.css;
+      templateScript = results[3].value.script;
     }
     if (results[4].status === "fulfilled") adminSettings = results[4].value;
     if (results[5].status === "fulfilled") {
@@ -486,15 +499,19 @@
   }
 
   async function saveTemplate(
-    html = templateHtml,
-    css = templateCss,
+    parts: VoucherTemplateInput = {
+      html: templateHtml,
+      css: templateCss,
+      script: templateScript,
+    },
     action: "save" | "reset" = "save",
   ) {
     templateBusy = true;
     try {
-      voucherTemplate = await api.updateVoucherTemplate({ html, css });
+      voucherTemplate = await api.updateVoucherTemplate(parts);
       templateHtml = voucherTemplate.html;
       templateCss = voucherTemplate.css;
+      templateScript = voucherTemplate.script;
       reportActionSuccess(action, "Voucher Template");
     } catch (caught) {
       reportActionFailure(action, "Voucher Template", caught);
@@ -505,9 +522,13 @@
 
   async function resetTemplate() {
     if (!voucherTemplate) return;
+    scriptRun = null;
     await saveTemplate(
-      voucherTemplate.default_html,
-      voucherTemplate.default_css,
+      {
+        html: voucherTemplate.default_html,
+        css: voucherTemplate.default_css,
+        script: voucherTemplate.default_script,
+      },
       "reset",
     );
   }
@@ -542,6 +563,7 @@
       adminSettings = freshSettings;
       templateHtml = freshTemplate.html;
       templateCss = freshTemplate.css;
+      templateScript = freshTemplate.script;
 
       // Build first: a card that loses its code throws before any frame exists.
       const srcdoc = buildVoucherDocument(
@@ -1398,7 +1420,8 @@
           <div>
             <h3 class="text-lg font-semibold">Voucher Template</h3>
             <p class="mt-1 text-sm text-muted-foreground">
-              HTML + CSS repeated once per card. JavaScript is disabled.
+              HTML + CSS repeated once per card, plus an optional Template
+              Script that runs once per preview or print.
             </p>
           </div>
           <div class="flex gap-2">
@@ -1447,6 +1470,36 @@
               bind:value={templateCss}
             ></textarea>
           </div>
+        </div>
+        <div class="mt-5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <label class="text-sm font-medium" for="voucher-template-script"
+              >Template Script</label
+            >
+            <button
+              type="button"
+              class="rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
+              onclick={() => (scriptRun = { script: templateScript })}
+              >Run</button
+            >
+          </div>
+          <p
+            role="note"
+            class="mt-1 rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-xs"
+          >
+            A Template Script can send voucher codes off this PC. Only paste
+            code you trust.
+          </p>
+          <textarea
+            id="voucher-template-script"
+            class="mt-2 min-h-40 w-full rounded-md border bg-background p-3 font-mono text-xs"
+            spellcheck="false"
+            placeholder="Optional JavaScript. Read card data from the cards, for example data-price=&quot;&#123;&#123;price&#125;&#125;&quot;."
+            bind:value={templateScript}
+          ></textarea>
+          <p class="mt-1 text-xs text-muted-foreground">
+            Run applies it to the preview; print always runs the saved script.
+          </p>
         </div>
       </div>
       <div class="rounded-lg border bg-card p-6">

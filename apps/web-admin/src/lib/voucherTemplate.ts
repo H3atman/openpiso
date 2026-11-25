@@ -14,6 +14,8 @@ export type VoucherTokenValues = Partial<Record<VoucherToken, string>>;
 export interface VoucherTemplateContent {
   html: string;
   css: string;
+  /** Template Script; omit (or leave empty) to render without one. */
+  script?: string;
 }
 
 const TOKEN_PATTERN =
@@ -113,6 +115,11 @@ export function buildVoucherDocument(
   { print = false, nonce = randomNonce() }: BuildOptions = {},
 ): string {
   const css = template.css.replace(/<\/style/gi, "<\\/style");
+  // `<\/` and `<\!--` keep string, comment, template-literal and regex meaning
+  // while stopping the HTML parser from ending or swallowing the element.
+  const script = (template.script ?? "")
+    .replace(/<\/script/gi, "<\\/script")
+    .replaceAll("<!--", "<\\!--");
   const fragments = cards.map((values) => {
     const filled = substituteVoucherTokens(template.html, values);
     const cleaned = cleanCard(filled);
@@ -131,7 +138,9 @@ export function buildVoucherDocument(
 <script nonce="${nonce}">${BOOTSTRAP}</script>
 <style>${css}</style>
 </head>
-<body><main class="voucher-grid">${fragments.join("\n")}</main>
+<body><main class="voucher-grid">${fragments.join("\n")}</main>${
+    script.trim() ? `\n<script nonce="${nonce}">${script}</script>` : ""
+  }
 <script nonce="${nonce}">${tail(print)}</script>
 </body>
 </html>`;

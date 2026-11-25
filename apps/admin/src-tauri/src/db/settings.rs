@@ -564,6 +564,9 @@ body { margin: 0; color: #111827; font-family: Arial, sans-serif; }
 .voucher-card dd { margin: 0; font-weight: 700; }
 @media print { .voucher-card { break-inside: avoid; page-break-inside: avoid; } }"#;
 
+/// Template Scripts are optional; the default is empty.
+pub const DEFAULT_VOUCHER_TEMPLATE_SCRIPT: &str = "";
+
 const MAX_VOUCHER_TEMPLATE_PART_BYTES: usize = 100_000;
 
 pub async fn voucher_template(pool: &SqlitePool) -> AppResult<VoucherTemplate> {
@@ -573,11 +576,16 @@ pub async fn voucher_template(pool: &SqlitePool) -> AppResult<VoucherTemplate> {
     let css = get_setting(pool, "voucher_template_css")
         .await?
         .unwrap_or_else(|| DEFAULT_VOUCHER_TEMPLATE_CSS.to_owned());
+    let script = get_setting(pool, "voucher_template_script")
+        .await?
+        .unwrap_or_else(|| DEFAULT_VOUCHER_TEMPLATE_SCRIPT.to_owned());
     Ok(VoucherTemplate {
         html,
         css,
+        script,
         default_html: DEFAULT_VOUCHER_TEMPLATE_HTML.to_owned(),
         default_css: DEFAULT_VOUCHER_TEMPLATE_CSS.to_owned(),
+        default_script: DEFAULT_VOUCHER_TEMPLATE_SCRIPT.to_owned(),
     })
 }
 
@@ -601,11 +609,17 @@ pub async fn update_voucher_template(
 ) -> AppResult<VoucherTemplate> {
     validate_voucher_template_part("HTML", &input.html)?;
     validate_voucher_template_part("CSS", &input.css)?;
+    if input.script.len() > MAX_VOUCHER_TEMPLATE_PART_BYTES {
+        return Err(AppError::InvalidInput(format!(
+            "voucher template script must not exceed {MAX_VOUCHER_TEMPLATE_PART_BYTES} bytes"
+        )));
+    }
 
     let mut transaction = super::begin_immediate(pool).await?;
     for (key, value) in [
         ("voucher_template_html", input.html.as_str()),
         ("voucher_template_css", input.css.as_str()),
+        ("voucher_template_script", input.script.as_str()),
     ] {
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at)
@@ -1069,13 +1083,62 @@ mod tests {
             &VoucherTemplateInput {
                 html: "<article>{{code}}</article>".to_owned(),
                 css: "@page { margin: 5mm; }".to_owned(),
+                script: "document.title = 'x';".to_owned(),
             },
         )
         .await?;
         assert_eq!(updated.html, "<article>{{code}}</article>");
         assert_eq!(updated.css, "@page { margin: 5mm; }");
+        assert_eq!(updated.script, "document.title = 'x';");
         assert_eq!(updated.default_html, DEFAULT_VOUCHER_TEMPLATE_HTML);
         assert_eq!(updated.default_css, DEFAULT_VOUCHER_TEMPLATE_CSS);
+        assert_eq!(updated.default_script, DEFAULT_VOUCHER_TEMPLATE_SCRIPT);
+        // Reading back (a reload) returns all three parts.
+        let reloaded = voucher_template(&pool).await?;
+        assert_eq!(reloaded.script, "document.title = 'x';");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn voucher_template_accepts_empty_script_and_defaults_to_empty() -> AppResult<()> {
+        let pool = test_pool().await?;
+        assert_eq!(voucher_template(&pool).await?.script, "");
+        update_voucher_template(
+            &pool,
+            &VoucherTemplateInput {
+                html: "<p>{{code}}</p>".to_owned(),
+                css: "p {}".to_owned(),
+                script: "1;".to_owned(),
+            },
+        )
+        .await?;
+        let cleared = update_voucher_template(
+            &pool,
+            &VoucherTemplateInput {
+                html: "<p>{{code}}</p>".to_owned(),
+                css: "p {}".to_owned(),
+                script: String::new(),
+            },
+        )
+        .await?;
+        assert_eq!(cleared.script, "");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn voucher_template_invalid_part_leaves_script_unsaved() -> AppResult<()> {
+        let pool = test_pool().await?;
+        let result = update_voucher_template(
+            &pool,
+            &VoucherTemplateInput {
+                html: " ".to_owned(),
+                css: "valid".to_owned(),
+                script: "1;".to_owned(),
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+        assert_eq!(voucher_template(&pool).await?.script, "");
         Ok(())
     }
 
@@ -1086,14 +1149,22 @@ mod tests {
             VoucherTemplateInput {
                 html: " ".to_owned(),
                 css: "valid".to_owned(),
+                script: String::new(),
             },
             VoucherTemplateInput {
                 html: "valid".to_owned(),
                 css: " ".to_owned(),
+                script: String::new(),
             },
             VoucherTemplateInput {
                 html: "x".repeat(MAX_VOUCHER_TEMPLATE_PART_BYTES + 1),
                 css: "valid".to_owned(),
+                script: String::new(),
+            },
+            VoucherTemplateInput {
+                html: "valid".to_owned(),
+                css: "valid".to_owned(),
+                script: "x".repeat(MAX_VOUCHER_TEMPLATE_PART_BYTES + 1),
             },
         ] {
             assert!(matches!(

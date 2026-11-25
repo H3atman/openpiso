@@ -8602,7 +8602,8 @@ mod tests {
             .owner(&token)
             .json(&serde_json::json!({
                 "html": "<article>{{code}}</article>",
-                "css": "@page { margin: 5mm; }"
+                "css": "@page { margin: 5mm; }",
+                "script": "document.title = 'x';"
             }))
             .send()
             .await
@@ -8614,10 +8615,13 @@ mod tests {
             .expect("template JSON");
         assert_eq!(updated["html"], "<article>{{code}}</article>");
         assert_eq!(updated["css"], "@page { margin: 5mm; }");
+        assert_eq!(updated["script"], "document.title = 'x';");
+        assert_eq!(updated["default_script"], "");
+        assert_eq!(initial["script"], "");
 
         let denied_update = client
             .put(&url)
-            .json(&serde_json::json!({ "html": "x", "css": "y" }))
+            .json(&serde_json::json!({ "html": "x", "css": "y", "script": "" }))
             .send()
             .await
             .expect("request should complete");

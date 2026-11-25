@@ -354,6 +354,8 @@ interface Case {
   name: string;
   html: string;
   css?: string;
+  /** Template Script text; saved with the template for print cases. */
+  script?: string;
   shopName?: string;
 }
 
@@ -540,6 +542,8 @@ interface Outcome {
   height?: number;
   frameHeight?: number;
   codesPresent?: boolean;
+  /** `document.body.dataset.ran` as left by a Template Script. */
+  ran?: string;
 }
 
 const PREVIEW = `[data-voucher-render="preview"]`;
@@ -599,6 +603,45 @@ async function previewCase(c: Case): Promise<Outcome> {
   return outcome;
 }
 
+/** Set an editor's value the way typing does. */
+async function setEditor(id: string, value: string): Promise<void> {
+  await evaluate(
+    `(() => { const el = document.getElementById(${JSON.stringify(id)}); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`,
+  );
+}
+
+async function clickButton(label: string): Promise<void> {
+  await evaluate(
+    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === ${JSON.stringify(label)}).setAttribute('data-e2e-button','')`,
+  );
+  await click("[data-e2e-button]");
+  await evaluate(
+    `document.querySelector('[data-e2e-button]').removeAttribute('data-e2e-button')`,
+  );
+}
+
+/** Put `script` in the editor, click Run, and read the preview outcome. */
+async function runScriptPreview(
+  name: string,
+  script: string,
+): Promise<Outcome> {
+  await setEditor("voucher-template-script", script);
+  const before = await renderSeq();
+  await clickButton("Run");
+  await waitFor(
+    `(() => { const el = document.querySelector('${PREVIEW}'); return Number(el.dataset.renderSeq) > ${before} && el.dataset.renderStatus !== 'rendering'; })()`,
+    `script preview settles: ${name}`,
+    100,
+  );
+  const state = await evaluate<{ status: Outcome["status"]; message: string }>(
+    `(() => { const el = document.querySelector('${PREVIEW}'); return { status: el.dataset.renderStatus, message: el.querySelector('[data-render-error]')?.textContent?.trim() ?? '' }; })()`,
+  );
+  const outcome: Outcome = { ...state };
+  if (state.status === "ready")
+    outcome.ran = await inFrame<string>(`document.body.dataset.ran ?? ''`);
+  return outcome;
+}
+
 let batchCodes: string[] = [];
 
 /** Save through the API (real PUT), print the batch through the UI, read the outcome. */
@@ -606,6 +649,7 @@ async function printCase(c: Case): Promise<Outcome> {
   await ownerFetch("PUT", "/web-admin/voucher-template", {
     html: c.html,
     css: c.css ?? "/* e2e */",
+    script: c.script ?? "",
   });
   await evaluate(
     `document.querySelectorAll('${printFrameSelector}').forEach((f) => f.remove()); window.__toasts.length = 0; true`,
@@ -624,8 +668,9 @@ async function printCase(c: Case): Promise<Outcome> {
       const codesPresent = await inFrame<boolean>(
         `${JSON.stringify(batchCodes)}.every((code) => document.body.textContent.includes(code))`,
       );
+      const ran = await inFrame<string>(`document.body.dataset.ran ?? ''`);
       // The hooked print() logged; afterprint then removes the frame.
-      return { status: "ready", message: "", height, codesPresent };
+      return { status: "ready", message: "", height, codesPresent, ran };
     }
     if (state.toast && /print|render|timed out|voucher/i.test(state.toast))
       return {
@@ -933,6 +978,138 @@ try {
     offline_grace_seconds: 30,
   });
 
+  // ---- Template Script (#41): preview runs only on Run; errors are visible.
+  await openVouchers("Template");
+  await waitFor(
+    `document.getElementById('voucher-template-script') && document.querySelector('${PREVIEW}')?.dataset.renderStatus === 'ready'`,
+    "script editor + preview ready",
+    100,
+  );
+  check(
+    "script: editor shows the trust warning",
+    await evaluate<boolean>(
+      `/send voucher codes off this PC/i.test(document.body.innerText) && !/JavaScript is disabled/i.test(document.body.innerText)`,
+    ),
+  );
+  const READ_PRICE = `data-price="{{price}}"`;
+  await setEditor(
+    "voucher-template-html",
+    `<div class="v" ${READ_PRICE}>{{code}}</div>`,
+  );
+  await setEditor("voucher-template-css", "/* e2e */");
+  await setEditor(
+    "voucher-template-script",
+    `document.body.dataset.ran = document.querySelector('[data-price]').dataset.price;`,
+  );
+  await waitFor(
+    `document.querySelector('${PREVIEW}').dataset.renderStatus === 'ready'`,
+    "html edit renders live",
+    100,
+  );
+  await Bun.sleep(300);
+  check(
+    "script: preview does not run the script before Run",
+    (await inFrame<string>(`document.body.dataset.ran ?? ''`)) === "",
+  );
+  const ranPreview = await runScriptPreview(
+    "reads card data",
+    `document.body.dataset.ran = document.querySelector('[data-price]').dataset.price;`,
+  );
+  check(
+    "script: Run executes it after the cards and it reads card data",
+    ranPreview.status === "ready" && /50/.test(ranPreview.ran ?? ""),
+    JSON.stringify(ranPreview),
+  );
+  const closing = await runScriptPreview(
+    "closing tags",
+    `// <!-- </script>\nconst s = "</script><!--";\ndocument.body.dataset.ran = s === "</script><!--" ? "ok" : "bad";`,
+  );
+  check(
+    "script: </script> and <!-- inside strings and comments work",
+    closing.status === "ready" && closing.ran === "ok",
+    JSON.stringify(closing),
+  );
+  const thrown = await runScriptPreview(
+    "throws",
+    `throw new Error("boom-sync");`,
+  );
+  check(
+    "script: a throwing script shows its message under the preview",
+    thrown.status === "error" && /boom-sync/.test(thrown.message),
+    JSON.stringify(thrown),
+  );
+  await screenshot("preview-script-error.png");
+  const rejected = await runScriptPreview(
+    "rejects",
+    `Promise.reject(new Error("boom-async"));`,
+  );
+  check(
+    "script: a rejected promise shows its message under the preview",
+    rejected.status === "error" && /boom-async/.test(rejected.message),
+    JSON.stringify(rejected),
+  );
+  const BUSY = `const t = Date.now(); while (Date.now() - t < 4500) {}`;
+  const slow = await runScriptPreview("busy loop", BUSY);
+  check(
+    "script: a script that blocks shows a timeout message under the preview",
+    slow.status === "timeout" && slow.message.length > 0,
+    JSON.stringify(slow),
+  );
+
+  // Save, reload, reset.
+  const SAVED = `document.body.dataset.ran = "saved";`;
+  await setEditor("voucher-template-html", `<p>{{code}}</p>`);
+  await setEditor("voucher-template-css", "p { color: red; }");
+  await setEditor("voucher-template-script", SAVED);
+  await clickButton("Save template");
+  await waitFor(
+    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Save template'))?.disabled === false`,
+    "save finished",
+  );
+  await openVouchers("Template");
+  await waitFor(
+    `document.getElementById('voucher-template-script')?.value.length > 0`,
+    "script reloaded",
+  );
+  check(
+    "script: HTML, CSS and script survive a reload",
+    await evaluate<boolean>(
+      `document.getElementById('voucher-template-html').value === '<p>{{code}}</p>' && document.getElementById('voucher-template-css').value === 'p { color: red; }' && document.getElementById('voucher-template-script').value === ${JSON.stringify(SAVED)}`,
+    ),
+  );
+  const stored = (await ownerFetch("GET", "/web-admin/voucher-template")) as {
+    script: string;
+    default_script: string;
+  };
+  check(
+    "script: API returns the saved script and an empty default_script",
+    stored.script === SAVED && stored.default_script === "",
+    JSON.stringify(stored),
+  );
+  await clickButton("Reset to default");
+  await waitFor(
+    `document.getElementById('voucher-template-script').value === ''`,
+    "script reset in editor",
+  );
+  await openVouchers("Template");
+  await waitFor(
+    `document.getElementById('voucher-template-html')?.value.includes('voucher-card')`,
+    "template reloaded after reset",
+  );
+  const afterReset = (await ownerFetch(
+    "GET",
+    "/web-admin/voucher-template",
+  )) as { html: string; css: string; script: string } & {
+    default_html: string;
+    default_css: string;
+  };
+  check(
+    "script: reset restores HTML, CSS and script",
+    afterReset.html === afterReset.default_html &&
+      afterReset.css === afterReset.default_css &&
+      afterReset.script === "",
+  );
+
   // ---- Print path (real Voucher Batch).
   await openVouchers("Batches");
   await waitFor(`document.body.innerText.includes('E2E')`, "batch list");
@@ -1007,6 +1184,54 @@ try {
     "print: failed prints leave no frame behind",
     await evaluate<boolean>(`!document.querySelector('${printFrameSelector}')`),
   );
+
+  // ---- Template Script in print: runs, and each failure kind blocks print.
+  const printScript = await printCase({
+    name: "script runs",
+    html: `<div class="v" data-price="{{price}}">{{code}}</div>`,
+    script: `// <!-- </script>\ndocument.body.dataset.ran = document.querySelector('[data-price]').dataset.price;`,
+  });
+  await Bun.sleep(200);
+  check(
+    "print script: runs in print and print() is called",
+    printScript.status === "ready" &&
+      /50/.test(printScript.ran ?? "") &&
+      printCalls.length === 1,
+    JSON.stringify({ printScript, printCalls: printCalls.length }),
+  );
+  await waitFor(
+    `!document.querySelector('${printFrameSelector}')`,
+    "print frame removed after afterprint",
+    60,
+  );
+  for (const [name, script, kind, message] of [
+    ["throws", `throw new Error("boom-sync");`, "error", /boom-sync/],
+    [
+      "rejects",
+      `Promise.reject(new Error("boom-async"));`,
+      "error",
+      /boom-async/,
+    ],
+    [
+      "busy loop",
+      `const t = Date.now(); while (Date.now() - t < 4500) {}`,
+      "timeout",
+      /timed out/i,
+    ],
+  ] as const) {
+    const blocked = await printCase({ name, html: V, script });
+    await Bun.sleep(200);
+    check(
+      `print script: ${name} shows its message and blocks print`,
+      blocked.status === kind &&
+        message.test(blocked.message) &&
+        printCalls.length === 0 &&
+        (await evaluate<boolean>(
+          `!document.querySelector('${printFrameSelector}')`,
+        )),
+      JSON.stringify({ blocked, printCalls: printCalls.length }),
+    );
+  }
 
   takeLeaks();
   for (const c of corpus.filter((x) => !x.shopName)) {
