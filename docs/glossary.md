@@ -1092,7 +1092,7 @@ points, price, shop name, expiry, prefix), plus CSS and a **Template Script**.
 Stored in settings, edited in web-admin with live preview and reset-to-default.
 Rendering happens only in the owner's isolated sandboxed browser frame; no
 customer surface executes it. See [ADR-0041](adr/0041-voucher-template.md) and
-[ADR-0091](adr/0091-voucher-template-script.md).
+[ADR-0092](adr/0092-voucher-template-script.md).
 
 ### Template Script **(decided)**
 

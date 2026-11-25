@@ -566,7 +566,7 @@ body { margin: 0; color: #111827; font-family: Arial, sans-serif; }
 .voucher-card dd { margin: 0; font-weight: 700; }
 @media print { .voucher-card { break-inside: avoid; page-break-inside: avoid; } }"#;
 
-/// Tiers each card by its `data-price` (ADR-0091); the default CSS colours the tiers.
+/// Tiers each card by its `data-price` (ADR-0092); the default CSS colours the tiers.
 pub const DEFAULT_VOUCHER_TEMPLATE_SCRIPT: &str = r#"// Tier each card by price: under 50 is low, 50 and over is high, free or unparseable gets none.
 for (const card of document.querySelectorAll("[data-price]")) {
   const price = Number(card.dataset.price.replace(/[^\d.]/g, "")); // NaN unless the whole string is a number

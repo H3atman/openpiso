@@ -1,4 +1,4 @@
--- Price-tier default Voucher Template (ADR-0091). Where BOTH the stored HTML and CSS
+-- Price-tier default Voucher Template (ADR-0092). Where BOTH the stored HTML and CSS
 -- still equal the migration 0018 default exactly, they are replaced with the new
 -- default and the default Template Script is set. Customised templates are left
 -- alone and get an empty script. Keep the text below byte-identical to

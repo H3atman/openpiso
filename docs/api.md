@@ -2546,7 +2546,7 @@ Voucher Template HTML supports `{{code}}`, `{{time}}`, `{{points}}`,
 printing happen only in sandboxed owner-browser iframes. Values are HTML-escaped,
 script elements are removed from the card HTML, and every card must still contain
 its own code after cleaning or the render fails. The generated document applies a
-nonce-only CSP (`script-src 'nonce-…'`) that runs just the Template Script (ADR-0091).
+nonce-only CSP (`script-src 'nonce-…'`) that runs just the Template Script (ADR-0092).
 The template CSS owns `@page`, grid, and page-break layout.
 
 Request bodies are the same shapes the retired Tauri commands accepted.

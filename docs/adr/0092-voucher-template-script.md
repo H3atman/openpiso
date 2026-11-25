@@ -1,4 +1,4 @@
-# ADR-0091: Voucher Template Script
+# ADR-0092: Voucher Template Script
 
 - Status: Accepted
 - Date: 2026-11-26

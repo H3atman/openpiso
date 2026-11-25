@@ -1,6 +1,6 @@
 # ADR-0041: Owner-only Voucher Template rendering
 
-- Status: Accepted; superseded in part by ADR-0091 (the "no JavaScript" decision)
+- Status: Accepted; superseded in part by ADR-0092 (the "no JavaScript" decision)
 - Date: 2026-07-21
 - Deciders: shop owner (product)
 - Refines: ADR-0024 (web-admin owner surface), ADR-0040 (Voucher Batch)

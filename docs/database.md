@@ -461,7 +461,7 @@ Canonical audit event types added in migration 0016:
 Migration `0018_voucher_template.sql` seeds the shop-wide Voucher Template in
 `settings` as `voucher_template_html` and `voucher_template_css`. The built-in
 card includes every supported placeholder and the CSS owns `@page`, the card
-grid, and page-break rules. The optional Template Script (ADR-0091) lives in
+grid, and page-break rules. The optional Template Script (ADR-0092) lives in
 `voucher_template_script`. Migration `0061_voucher_price_tier_default.sql`
 upgrades a template whose HTML and CSS both still equal the 0018 default to the
 price-tier default (`data-price` card, tier strip CSS, default script); any other

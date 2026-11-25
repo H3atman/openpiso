@@ -567,7 +567,7 @@ CSP). Covers: sandbox attributes, preview render and frame height (grows and
 shrinks), a card that loses its code, a render that never reports (timeout),
 the print path for a real 3-card batch reaching `ready` and calling `print()`,
 frame cleanup after `afterprint`, failed prints blocked with a visible error,
-the Template Script (ADR-0091: runs only on Run in preview, runs in print,
+the Template Script (ADR-0092: runs only on Run in preview, runs in print,
 `</script>`/`<!--` in strings and comments, save/reload/reset, and a throw, a
 rejection and a blocking loop each showing their message and blocking print),
 and the HTML/CSS-only attack corpus (spec #33) run through both preview and print.
