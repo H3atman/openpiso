@@ -648,6 +648,7 @@ Chrome lookup honours `CHROME_PATH`. No package script is defined.
 cd apps/web-admin
 bun run scripts/dashboard-screenshots.ts --out <dir>
 bun run scripts/settings-screenshots.ts --out <dir>
+bun run scripts/vouchers-screenshots.ts --out <dir>
 ```
 
 - **Dashboard** (`dashboard-harness.html`): busy, quiet and empty scenarios;
@@ -658,6 +659,12 @@ bun run scripts/settings-screenshots.ts --out <dir>
   phone index; desktop 1280, wide 1920 and phone 390; light and dark; the
   empty scenario; dialog, focus and validation states. Query:
   `section=<section id>|index`, `theme=light|dark`, `scenario=default|empty`.
+- **Vouchers** (`vouchers-harness.html`): the Vouchers, Batches and Template
+  tabs; desktop 1280, wide 1920 and phone 390; light and dark; batch detail,
+  the Template Script Run preview, keyboard focus and the empty scenario. The
+  void confirmations are native `window.confirm` and are not captured. Query:
+  `tab=vouchers|batches|template`, `editor=html|css|script`,
+  `scenario=default|empty`, `theme=light|dark`.
 
 ## Optional agent skills
 
