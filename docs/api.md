@@ -721,10 +721,54 @@ rows):
 The server calculates ranges from the admin host's local business date. Weekly
 is Monday through Sunday; Monthly is month-to-date. PC sales are cash revenue
 anchored to that PC, so sold vouchers without a PC remain in the Summary Total
-but are not assigned to a PC.
+but are not assigned to a PC. The Sales Report page uses this call for the four
+fixed cards; its per-PC table reads `reports/pc-sales` below.
+
+`POST /web-admin/reports/pc-sales` returns Coin Sales and Voucher Sales per PC
+for an inclusive range. Body: `{ "from_date": "YYYY-MM-DD", "to_date":
+"YYYY-MM-DD" }`, both required; a reversed or malformed range is refused with
+HTTP 400. Every registered PC appears (zeros when it has no sales), in natural
+name order. Batch-sold voucher cash is counted at the PC where the card was
+redeemed. Cash Revenue with no registered PC (single-mint sold vouchers) is the
+`unassigned` entry, so the PC entries plus `unassigned` add up to the range's
+Cash Revenue from `reports/summary`.
+
+```json
+{
+  "from_date": "2026-08-01",
+  "to_date": "2026-08-31",
+  "pcs": [
+    { "id": "pc-01", "name": "PC 01", "coin_sales_cents": 200, "voucher_sales_cents": 0 },
+    { "id": "pc-02", "name": "PC 02", "coin_sales_cents": 500, "voucher_sales_cents": 500 }
+  ],
+  "unassigned": { "coin_sales_cents": 0, "voucher_sales_cents": 2000 }
+}
+```
+
+`GET /web-admin/cash-on-hand` returns, per kind (`coin_box`,
+`voucher_cash`), the **Uncollected** amount and the last Cash Collection, and is
+independent of any report range (ADR-0091):
+
+```json
+{
+  "coin_box": {
+    "uncollected_cents": 12500,
+    "last_collection": { "amount_cents": 4000, "collected_at": "2026-11-20 08:30:00" }
+  },
+  "voucher_cash": { "uncollected_cents": 0, "last_collection": null }
+}
+```
+
+`POST /web-admin/cash-collections` with `{ "kind": "coin_box" | "voucher_cash" }`
+records a **Cash Collection** of everything of that kind not yet collected. The
+body carries only the kind; the server computes the amount in one
+`BEGIN IMMEDIATE` transaction, so concurrent calls record the cash once. It
+returns `{ "kind", "amount_cents", "collected_at" }`. A call at ₱0 Uncollected
+is refused with `409`. It appends a non-cash `cash_collected` Audit Log event
+(Audit Category `custody`) and never changes any report figure.
 
 `POST /web-admin/reports/summary` returns cash
-revenue, free time dispensed, points minted by wheel, points liability,
+revenue split into Coin Sales and Voucher Sales, free time dispensed, points minted by wheel, points liability,
 and per-period buckets:
 
 ```json
@@ -732,6 +776,8 @@ and per-period buckets:
   "period": "day",
   "from_date": "2026-06-01",
   "to_date": "2026-06-21",
+  "coin_sales_cents": 3000,
+  "voucher_sales_cents": 2000,
   "cash_revenue_cents": 5000,
   "free_time_dispensed_seconds": 900,
   "points_minted_by_wheel_centi": 400,
@@ -739,6 +785,8 @@ and per-period buckets:
   "buckets": [
     {
       "period_label": "2026-06-21",
+      "coin_sales_cents": 3000,
+      "voucher_sales_cents": 2000,
       "cash_revenue_cents": 5000,
       "free_time_dispensed_seconds": 900,
       "points_minted_by_wheel_centi": 400
@@ -747,18 +795,31 @@ and per-period buckets:
 }
 ```
 
-Cash revenue = coins + sold vouchers. Free time dispensed = promo voucher
+Cash Revenue = Coin Sales + Voucher Sales, exactly, per bucket and in total.
+Coin Sales = accepted coins (`coin_accepted`) + Rejection Credits
+(`rejection_credit`). Voucher Sales = single-mint sold vouchers
+(`voucher_sold`) + batch-sold cards recognised at redemption
+(`sold_voucher_redeemed`). Free time dispensed = promo voucher
 redemptions + points redemptions + wheel winnings + manual admin add-time +
 Coin Promo bonus seconds. A Coin Promo coin's full cash stays in revenue; only
 its bonus seconds count as free time. The two are never blended (ADR-0014).
 `points_minted_by_wheel_centi` is the
 gross centipoints won through the wheel over the period (not net of spin
-costs; ADR-0046). `period` is `day`, `week`, or `month`. Date fields are
+costs; ADR-0046). `period` is `day`, `week`, or `month`. Bucket
+`period_label` is the local date (`YYYY-MM-DD`) for `day`, the ISO date of the
+week's Monday for `week` (so a Monday–Sunday week spanning New Year is one
+bucket), and `YYYY-MM` for `month`. Date fields are
 optional `YYYY-MM-DD` local-date strings; omitting both reads all history. The
-Sales Report page reads this endpoint with `period: "day"` over one calendar
-month to draw the Daily Sales Trend line chart. Days with no revenue are absent
-from `buckets` and the page fills them as zero; days after the admin host's
-business date are left off the plot rather than drawn as zero.
+Sales Report page reads this endpoint over a selectable range (Today, This
+week, This month, Last 30 days, or a custom From/To) to fill the Summary tiles
+and the Sales Trend chart, with Coin Sales and Voucher Sales stacked and the
+total in the tooltip. The page picks the bucket from the range length: `day`
+buckets up to 92 days, `week` (Monday-start) up to 366 days, and `month`
+beyond. Buckets with no revenue are absent from `buckets`; the page zero-fills
+them client-side. Buckets that start after the admin host's business date are
+left off the plot rather than drawn as zero. Presets are anchored on the
+business date from `/web-admin/reports/overview`, never the browser clock.
+Dates must be real calendar dates (`2026-02-31` is a `400`).
 
 `POST /web-admin/reports/attendance` returns Attendance flow and exposure for
 the authenticated Owner Session. Its required `period` is `day`, `week`, or
@@ -804,6 +865,21 @@ one account or PC across the same date range:
 
 `get_points_liability` returns the integer total of outstanding unredeemed
 centipoints across active accounts.
+
+`GET /web-admin/dashboard` (`today`) and `GET /web-admin/today` return today's
+Cash Revenue for the Admin PC's local business date, read from the same
+`report_cash_revenue` view as the report summary, so the Dashboard always
+equals the Sales Report's Today figure (Coin Sales include Rejection Credits;
+Voucher Sales include sold vouchers and batch cards at redemption):
+
+```json
+{ "coin_sales_cents": 700, "voucher_sales_cents": 2500, "cash_revenue_cents": 3200 }
+```
+
+`cash_revenue_cents` is always the sum of the two parts. The former
+`sales_cents`, `transaction_count` and `seconds_sold` fields are gone: the
+audit source has no per-transaction count or seconds, so they are not
+meaningful there.
 
 ## Manual Guest Time adjustment
 
@@ -1862,7 +1938,10 @@ list, create, download, delete, schedule, or restore Backups.
 | `POST /web-admin/accounts/delete`                  | `admin_delete_accounts`        | atomic soft delete of `{ "account_ids": string[] }`; up to 1,000 explicit IDs, all must be active; forfeits balances, preserves history, ends sessions, revokes Account Sessions, and returns `{ "deleted_count": number }`                                                                 |
 | `POST /web-admin/accounts/adjust-time`             | `adjust_account_time`          | signed `delta` seconds; clamped ≥ 0, applied delta audited                                                                             |
 | `POST /web-admin/accounts/adjust-points`           | `adjust_account_points`        | signed `delta_centi` centipoints; clamped ≥ 0, applied delta audited                                                                   |
+| `GET /web-admin/cash-on-hand`                      | –                              | owner-authenticated Uncollected and last collection per kind (ADR-0091)                                                                 |
+| `POST /web-admin/cash-collections`                 | –                              | owner-only Collect; body `{ "kind" }` only, server-computed amount, `409` at ₱0                                                         |
 | `POST /web-admin/reports/summary`                  | `get_report_summary`           |                                                                                                                                        |
+| `POST /web-admin/reports/pc-sales`                 | –                              | ranged per-PC Coin/Voucher Sales plus `unassigned`; owner-authenticated                                                                |
 | `POST /web-admin/reports/attendance`               | –                              | flow range plus independent Earning Month and Account pages; owner-authenticated; current liability is range-independent                 |
 | `POST /web-admin/reports/account`                  | `get_account_report`           |                                                                                                                                        |
 | `POST /web-admin/reports/pc`                       | `get_pc_report`                |                                                                                                                                        |

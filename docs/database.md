@@ -358,7 +358,13 @@ Reporting views:
   `business_week`,
   `business_month`, `account_id`, `pc_id`, `event_type`, `amount_cents`,
   `seconds_delta`, `audit_event_id`, and `created_at` so per-period and
-  per-dimension totals reconcile exactly with canonical events.
+  per-dimension totals reconcile exactly with canonical events. The report
+  summary splits it by `event_type` into Coin Sales (`coin_accepted`,
+  `rejection_credit`) and Voucher Sales (`voucher_sold`,
+  `sold_voucher_redeemed`); the grouping lives in
+  `openpiso_core::report::SalesKind`. Its week buckets are labelled by the
+  week's Monday (`date(business_date, 'weekday 0', '-6 days')`) in the query,
+  not by the view's `business_week` (`%Y-W%W`), which splits New Year weeks.
 - `report_free_time_dispensed` — time given away without cash:
   `promo_voucher_redeemed`, `points_redeemed`, `wheel_spin`, and
   `manual_adjustment` events with `seconds_delta > 0`, plus only the positive
@@ -396,6 +402,22 @@ delta in metadata, and inserts the linked `manual_adjustments` detail row in
 the same SQLite transaction. The audit event's `summary` includes the optional
 reason so the audit viewer's free-text search can find it. A negative delta is
 a compensating event, not an audit-history edit (ADR-0015).
+
+## Cash Collections (migration 0060)
+
+`cash_collections` records custody of cash, never revenue (ADR-0091):
+`id`, `kind` (`coin_box` | `voucher_cash`), `amount_cents` (positive integer)
+and server `collected_at` (`CURRENT_TIMESTAMP`, second precision). It is
+append-only: triggers `cash_collections_no_update` and
+`cash_collections_no_delete` abort `UPDATE` and `DELETE`. Index
+`idx_cash_collections_kind` on `(kind, collected_at)`. It belongs to the
+**Ledger** Backup Set.
+
+Uncollected(kind) is `report_cash_revenue` sales of that kind (Coin: `coin_accepted`,
+`rejection_credit`; Voucher: `voucher_sold`, `sold_voucher_redeemed`) minus
+`SUM(amount_cents)` of that kind's rows. There is no timestamp boundary. Each
+collection also appends one non-cash `cash_collected` audit event (category
+`custody`).
 
 ## Voucher batches (migrations 0016, 0019, 0020, 0021)
 
@@ -440,7 +462,7 @@ Migration `0018_voucher_template.sql` seeds the shop-wide Voucher Template in
 `settings` as `voucher_template_html` and `voucher_template_css`. The built-in
 card includes every supported placeholder and the CSS owns `@page`, the card
 grid, and page-break rules. The optional Template Script (ADR-0091) lives in
-`voucher_template_script`. Migration `0060_voucher_price_tier_default.sql`
+`voucher_template_script`. Migration `0061_voucher_price_tier_default.sql`
 upgrades a template whose HTML and CSS both still equal the 0018 default to the
 price-tier default (`data-price` card, tier strip CSS, default script); any other
 template is untouched and gets an empty script. The migration text must stay

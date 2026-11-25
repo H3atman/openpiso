@@ -954,21 +954,14 @@ pub struct WheelSpinResponse {
     pub result: WheelSpinResult,
 }
 
+/// Today's Cash Revenue for the Admin's local business date, split into Coin
+/// Sales and Voucher Sales. Read from the same canonical view as the Sales
+/// Report, so the Dashboard and the report's Today figure always agree.
 #[derive(Debug, Clone, Serialize)]
 pub struct TodayReport {
-    pub sales_cents: i64,
-    pub transaction_count: i64,
-    pub seconds_sold: i64,
-}
-
-impl From<(i64, i64, i64)> for TodayReport {
-    fn from(value: (i64, i64, i64)) -> Self {
-        Self {
-            sales_cents: value.0,
-            transaction_count: value.1,
-            seconds_sold: value.2,
-        }
-    }
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+    pub cash_revenue_cents: i64,
 }
 
 /// PC Monitoring state on the dashboard (ADR-0076): the shop-wide toggle and
@@ -1182,6 +1175,9 @@ pub struct HealthStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportBucket {
     pub period_label: String,
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+    /// Always `coin_sales_cents + voucher_sales_cents`.
     pub cash_revenue_cents: i64,
     pub free_time_dispensed_seconds: i64,
     pub points_minted_by_wheel_centi: i64,
@@ -1192,6 +1188,9 @@ pub struct ReportSummary {
     pub period: ReportPeriod,
     pub from_date: String,
     pub to_date: String,
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+    /// Always `coin_sales_cents + voucher_sales_cents`.
     pub cash_revenue_cents: i64,
     pub free_time_dispensed_seconds: i64,
     pub points_minted_by_wheel_centi: i64,
@@ -1225,6 +1224,37 @@ pub struct SalesReportPc {
     pub weekly_sales_cents: i64,
     pub monthly_sales_cents: i64,
     pub total_sales_cents: i64,
+}
+
+/// Coin Sales and Voucher Sales for one PC (or the unassigned row) over a range.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SalesSplit {
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PcSalesRow {
+    pub id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub sales: SalesSplit,
+}
+
+/// Ranged per-PC sales. `unassigned` is Cash Revenue with no PC (single-mint
+/// sold vouchers), so the PC rows plus it equal the range's Cash Revenue.
+#[derive(Debug, Clone, Serialize)]
+pub struct PcSalesReport {
+    pub from_date: String,
+    pub to_date: String,
+    pub pcs: Vec<PcSalesRow>,
+    pub unassigned: SalesSplit,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PcSalesInput {
+    pub from_date: String,
+    pub to_date: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

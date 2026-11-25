@@ -64,12 +64,13 @@ use crate::{
         OwnerAccount, OwnerAuthResponse, OwnerPinInput, Pc, PcMonitoringEnabledInput,
         PcMonitoringStatus, PcMonitoringSuppression, PcMonitoringSuppressionCancelInput,
         PcMonitoringSuppressionCancelled, PcMonitoringSuppressionInput, PcRegisterInput, PcReport,
-        PcReportInput, PcSettings, PcSettingsInput, PendingPointsTransfer, PointsTransferRequest,
-        RedemptionTier, RedemptionTiersInput, ReportSummary, ReportSummaryInput,
-        SalesReportOverview, ShopHoursSettingsInput, ShopHoursSettingsResponse, ShopOverrideInput,
-        ShopRate, ShopRateInput, ShopStatus, ThemeSettings, ThemeSettingsInput, TodayReport,
-        TransferCodeInput, Voucher, VoucherBatch, VoucherBatchDetail, VoucherBatchSummary,
-        VoucherTemplate, VoucherTemplateInput, WheelSettings, WheelSettingsInput,
+        PcReportInput, PcSalesInput, PcSalesReport, PcSettings, PcSettingsInput,
+        PendingPointsTransfer, PointsTransferRequest, RedemptionTier, RedemptionTiersInput,
+        ReportSummary, ReportSummaryInput, SalesReportOverview, ShopHoursSettingsInput,
+        ShopHoursSettingsResponse, ShopOverrideInput, ShopRate, ShopRateInput, ShopStatus,
+        ThemeSettings, ThemeSettingsInput, TodayReport, TransferCodeInput, Voucher, VoucherBatch,
+        VoucherBatchDetail, VoucherBatchSummary, VoucherTemplate, VoucherTemplateInput,
+        WheelSettings, WheelSettingsInput,
     },
     monitoring, owner, reports, serial_port_detection,
     sessions::{SessionStore, SignOutOutcome},
@@ -564,8 +565,11 @@ pub(crate) fn router(state: OwnerServerState) -> Router {
             post(adjust_account_points),
         )
         // Reports.
+        .route("/web-admin/cash-on-hand", get(cash_on_hand))
+        .route("/web-admin/cash-collections", post(collect_cash))
         .route("/web-admin/reports/summary", post(report_summary))
         .route("/web-admin/reports/overview", get(sales_report_overview))
+        .route("/web-admin/reports/pc-sales", post(pc_sales_report))
         .route("/web-admin/reports/attendance", post(attendance_report))
         .route("/web-admin/reports/account", post(account_report))
         .route("/web-admin/reports/pc", post(pc_report))
@@ -2128,11 +2132,42 @@ async fn report_summary(
     .map(Json)
 }
 
+async fn cash_on_hand(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+) -> HttpResult<db::cash_collections::CashOnHand> {
+    db::cash_on_hand(&state.pool).await.map(Json)
+}
+
+/// The body carries only the kind; the amount is always server-computed.
+#[derive(Debug, Deserialize)]
+struct CollectCashInput {
+    kind: openpiso_core::report::CashCollectionKind,
+}
+
+async fn collect_cash(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+    Json(input): Json<CollectCashInput>,
+) -> HttpResult<db::cash_collections::CashCollection> {
+    db::collect_cash(&state.pool, input.kind).await.map(Json)
+}
+
 async fn sales_report_overview(
     State(state): State<OwnerServerState>,
     _session: OwnerSession,
 ) -> HttpResult<SalesReportOverview> {
     reports::sales_report_overview(&state.pool).await.map(Json)
+}
+
+async fn pc_sales_report(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+    Json(input): Json<PcSalesInput>,
+) -> HttpResult<PcSalesReport> {
+    reports::pc_sales_report(&state.pool, &input.from_date, &input.to_date)
+        .await
+        .map(Json)
 }
 
 async fn account_report(
@@ -6151,6 +6186,646 @@ mod tests {
         assert_eq!(body["seconds_delta"], 300);
     }
 
+    /// Coin Sales (accepted coins + Rejection Credits) and Voucher Sales
+    /// (single-mint sold vouchers + batch cards recognised at redemption) are
+    /// reported beside Cash Revenue, which is always their sum (#35).
+    #[tokio::test]
+    async fn report_summary_splits_coin_and_voucher_sales() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let sessions = state.sessions.clone();
+        let account = accounts::create(
+            &pool,
+            "split-redeemer",
+            "password",
+            AccountCreator::Admin,
+            None,
+        )
+        .await
+        .expect("account should be created");
+        sqlx::query(
+            "INSERT INTO audit_log
+             (id, event_type, outcome, actor, pc_id, summary, metadata_json, created_at)
+             VALUES ('split-rejection', 'coin_batch_rejected', 'failure', 'system', 'pc-01',
+                     'rejected', '{\"pulse_count\":11}', CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .expect("rejection fixture should insert");
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "split-pin").await;
+        let auth = |request: reqwest::RequestBuilder| request.owner(&token);
+
+        for (pc_id, amount_cents) in [("pc-01", 100), ("pc-02", 500)] {
+            sessions
+                .record_coin_event(
+                    &pool,
+                    &crate::models::CoinEventInput {
+                        pc_id: pc_id.to_owned(),
+                        amount_cents,
+                        pulse_count: Some(1),
+                        timestamp: None,
+                    },
+                    &crate::models::CoinSourceClaim::Simulator,
+                )
+                .await
+                .expect("coin should be accepted");
+        }
+        let sold = auth(client.post(format!("http://{address}/web-admin/vouchers")))
+            .json(&serde_json::json!({
+                "seconds_value": 600, "points_value_centi": 0,
+                "sold_amount_cents": 2_000, "expires_at": null
+            }))
+            .send()
+            .await
+            .expect("sold voucher should complete");
+        assert_eq!(sold.status(), StatusCode::OK);
+        let batch = auth(client.post(format!("http://{address}/web-admin/voucher-batches")))
+            .json(&serde_json::json!({
+                "prefix": "SOLD", "suffix_length": 8, "count": 1,
+                "seconds_value": 600, "points_value_centi": 0, "cash_amount_cents": 500
+            }))
+            .send()
+            .await
+            .expect("batch should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("batch JSON");
+        let code: String = sqlx::query_scalar("SELECT code FROM vouchers WHERE batch_id = ?")
+            .bind(batch["id"].as_str().expect("batch id"))
+            .fetch_one(&pool)
+            .await
+            .expect("batch card should exist");
+        db::redeem_voucher(&pool, &account.id, "pc-02", &code)
+            .await
+            .expect("batch card should redeem");
+        let credit = auth(client.post(format!("http://{address}/web-admin/rejection-credits")))
+            .json(&serde_json::json!({
+                "rejection_audit_id": "split-rejection",
+                "denomination_cents": 100, "coins": 1, "dry_run": false
+            }))
+            .send()
+            .await
+            .expect("rejection credit should complete");
+        assert_eq!(credit.status(), StatusCode::OK);
+
+        let summary = |body: serde_json::Value| {
+            let request = auth(client.post(format!("http://{address}/web-admin/reports/summary")));
+            async move {
+                let response = request
+                    .json(&body)
+                    .send()
+                    .await
+                    .expect("summary should complete");
+                assert_eq!(response.status(), StatusCode::OK);
+                response
+                    .json::<serde_json::Value>()
+                    .await
+                    .expect("summary JSON")
+            }
+        };
+
+        // Today: coins 100 + 500 + credit 100; vouchers 2000 + batch 500.
+        let today = summary(serde_json::json!({ "period": "day" })).await;
+        assert_eq!(today["coin_sales_cents"], 700);
+        assert_eq!(today["voucher_sales_cents"], 2_500);
+        assert_eq!(today["cash_revenue_cents"], 3_200);
+        let bucket = &today["buckets"][0];
+        assert_eq!(today["buckets"].as_array().map(Vec::len), Some(1));
+        assert_eq!(bucket["coin_sales_cents"], 700);
+        assert_eq!(bucket["voucher_sales_cents"], 2_500);
+        assert_eq!(bucket["cash_revenue_cents"], 3_200);
+
+        // The Dashboard and /today read the same Cash Revenue source, so they
+        // agree with the report's Today figure (#36).
+        let dashboard = auth(client.get(format!("http://{address}/web-admin/dashboard")))
+            .send()
+            .await
+            .expect("dashboard should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("dashboard JSON");
+        assert_eq!(
+            dashboard["today"],
+            serde_json::json!({
+                "coin_sales_cents": 700,
+                "voucher_sales_cents": 2_500,
+                "cash_revenue_cents": 3_200,
+            })
+        );
+        let today_route = auth(client.get(format!("http://{address}/web-admin/today")))
+            .send()
+            .await
+            .expect("today should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("today JSON");
+        assert_eq!(today_route, dashboard["today"]);
+
+        // Mon 2025-12-29 .. Sun 2026-01-04 is one week across New Year.
+        for (id, event_type, amount_cents, created_at) in [
+            ("ny-coin", "coin_accepted", 100, "2025-12-29T12:00:00Z"),
+            ("ny-voucher", "voucher_sold", 2_000, "2026-01-03T12:00:00Z"),
+            ("ny-next", "coin_accepted", 500, "2026-01-05T12:00:00Z"),
+        ] {
+            sqlx::query(
+                "INSERT INTO audit_log
+                 (id, event_type, outcome, actor, amount_cents, cash_flag, summary, created_at)
+                 VALUES (?, ?, 'success', 'system', ?, 1, 'fixture', ?)",
+            )
+            .bind(id)
+            .bind(event_type)
+            .bind(amount_cents)
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .expect("New Year fixture should insert");
+        }
+        let range = |period: &str| serde_json::json!({ "period": period, "from_date": "2025-12-01", "to_date": "2026-01-31" });
+        let weeks = summary(range("week")).await;
+        assert_eq!(
+            weeks["buckets"],
+            serde_json::json!([
+                { "period_label": "2025-12-29", "coin_sales_cents": 100, "voucher_sales_cents": 2_000,
+                  "cash_revenue_cents": 2_100, "free_time_dispensed_seconds": 0,
+                  "points_minted_by_wheel_centi": 0 },
+                { "period_label": "2026-01-05", "coin_sales_cents": 500, "voucher_sales_cents": 0,
+                  "cash_revenue_cents": 500, "free_time_dispensed_seconds": 0,
+                  "points_minted_by_wheel_centi": 0 },
+            ])
+        );
+        let months = summary(range("month")).await;
+        let labels: Vec<&str> = months["buckets"]
+            .as_array()
+            .expect("month buckets")
+            .iter()
+            .map(|bucket| bucket["period_label"].as_str().expect("label"))
+            .collect();
+        assert_eq!(labels, ["2025-12", "2026-01"]);
+    }
+
+    /// The ranged per-PC read splits each PC's Cash Revenue into Coin and
+    /// Voucher Sales, puts PC-less voucher cash in `unassigned`, and the rows
+    /// add up to the range's Cash Revenue (#38).
+    #[tokio::test]
+    async fn pc_sales_splits_per_pc_with_unassigned_and_follows_range() {
+        use chrono::Local;
+
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let sessions = state.sessions.clone();
+        let account = accounts::create(
+            &pool,
+            "pc-sales-redeemer",
+            "password",
+            AccountCreator::Admin,
+            None,
+        )
+        .await
+        .expect("account should be created");
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "pc-sales-pin").await;
+        let auth = |request: reqwest::RequestBuilder| request.owner(&token);
+
+        // A: coin 100. B: coin 500 plus a redeemed ₱5 batch card. No PC: ₱20 sold voucher.
+        for (pc_id, amount_cents) in [("pc-01", 100), ("pc-02", 500)] {
+            sessions
+                .record_coin_event(
+                    &pool,
+                    &crate::models::CoinEventInput {
+                        pc_id: pc_id.to_owned(),
+                        amount_cents,
+                        pulse_count: Some(1),
+                        timestamp: None,
+                    },
+                    &crate::models::CoinSourceClaim::Simulator,
+                )
+                .await
+                .expect("coin should be accepted");
+        }
+        let sold = auth(client.post(format!("http://{address}/web-admin/vouchers")))
+            .json(&serde_json::json!({
+                "seconds_value": 600, "points_value_centi": 0,
+                "sold_amount_cents": 2_000, "expires_at": null
+            }))
+            .send()
+            .await
+            .expect("sold voucher should complete");
+        assert_eq!(sold.status(), StatusCode::OK);
+        let batch = auth(client.post(format!("http://{address}/web-admin/voucher-batches")))
+            .json(&serde_json::json!({
+                "prefix": "SOLD", "suffix_length": 8, "count": 1,
+                "seconds_value": 600, "points_value_centi": 0, "cash_amount_cents": 500
+            }))
+            .send()
+            .await
+            .expect("batch should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("batch JSON");
+        let code: String = sqlx::query_scalar("SELECT code FROM vouchers WHERE batch_id = ?")
+            .bind(batch["id"].as_str().expect("batch id"))
+            .fetch_one(&pool)
+            .await
+            .expect("batch card should exist");
+        db::redeem_voucher(&pool, &account.id, "pc-02", &code)
+            .await
+            .expect("batch card should redeem");
+
+        let pc_sales = |from: String, to: String| {
+            let request = auth(client.post(format!("http://{address}/web-admin/reports/pc-sales")));
+            async move {
+                request
+                    .json(&serde_json::json!({ "from_date": from, "to_date": to }))
+                    .send()
+                    .await
+                    .expect("pc sales should complete")
+            }
+        };
+        let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let row = |body: &serde_json::Value, id: &str| {
+            body["pcs"]
+                .as_array()
+                .expect("pcs array")
+                .iter()
+                .find(|pc| pc["id"] == id)
+                .cloned()
+                .expect("pc row")
+        };
+
+        let response = pc_sales(today.clone(), today.clone()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .expect("pc sales JSON");
+        assert_eq!(body["pcs"].as_array().map(Vec::len), Some(4));
+        let a = row(&body, "pc-01");
+        assert_eq!(
+            (&a["coin_sales_cents"], &a["voucher_sales_cents"]),
+            (&100.into(), &0.into())
+        );
+        let b = row(&body, "pc-02");
+        assert_eq!(
+            (&b["coin_sales_cents"], &b["voucher_sales_cents"]),
+            (&500.into(), &500.into())
+        );
+        assert_eq!(b["name"], "PC 02");
+        assert_eq!(
+            body["unassigned"],
+            serde_json::json!({ "coin_sales_cents": 0, "voucher_sales_cents": 2_000 })
+        );
+        // PC rows + unassigned = the summary's Cash Revenue for the same range.
+        let summary = auth(client.post(format!("http://{address}/web-admin/reports/summary")))
+            .json(&serde_json::json!({ "period": "day", "from_date": today, "to_date": today }))
+            .send()
+            .await
+            .expect("summary should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("summary JSON");
+        let sum_of = |key: &str| -> i64 {
+            body["pcs"]
+                .as_array()
+                .expect("pcs array")
+                .iter()
+                .map(|pc| pc[key].as_i64().expect("cents"))
+                .sum::<i64>()
+                + body["unassigned"][key].as_i64().expect("unassigned cents")
+        };
+        assert_eq!(
+            sum_of("coin_sales_cents"),
+            summary["coin_sales_cents"].as_i64().unwrap()
+        );
+        assert_eq!(
+            sum_of("voucher_sales_cents"),
+            summary["voucher_sales_cents"].as_i64().unwrap()
+        );
+        assert_eq!(
+            sum_of("coin_sales_cents") + sum_of("voucher_sales_cents"),
+            3_100
+        );
+
+        // A range that excludes today gives every PC and the unassigned row zeros.
+        let empty = pc_sales("2000-01-01".to_owned(), "2000-01-31".to_owned())
+            .await
+            .json::<serde_json::Value>()
+            .await
+            .expect("empty pc sales JSON");
+        assert_eq!(empty["pcs"].as_array().map(Vec::len), Some(4));
+        assert!(empty["pcs"]
+            .as_array()
+            .expect("pcs")
+            .iter()
+            .all(|pc| { pc["coin_sales_cents"] == 0 && pc["voucher_sales_cents"] == 0 }));
+        assert_eq!(
+            empty["unassigned"],
+            serde_json::json!({ "coin_sales_cents": 0, "voucher_sales_cents": 0 })
+        );
+
+        // A reversed range is refused, as for the summary.
+        assert_eq!(
+            pc_sales("2026-02-01".to_owned(), "2026-01-01".to_owned())
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    /// An inclusive From–To range keeps every event whose Admin-local date is in
+    /// it, including one in the last UTC second before local midnight, and
+    /// refuses a reversed or malformed range instead of returning nothing (#37).
+    #[tokio::test]
+    async fn report_summary_range_is_inclusive_by_local_date_and_validated() {
+        use chrono::{Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
+
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "range-pin").await;
+        let auth = |request: reqwest::RequestBuilder| request.owner(&token);
+
+        // Local midnight starting 2024-03-11, as a UTC instant: the event one
+        // second earlier is the last second of local 2024-03-10 whatever the
+        // host time zone is.
+        let midnight = Local
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2024, 3, 11)
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .expect("valid date"),
+            )
+            .earliest()
+            .expect("local midnight exists")
+            .with_timezone(&Utc);
+        let stamp =
+            |instant: chrono::DateTime<Utc>| instant.to_rfc3339_opts(SecondsFormat::Secs, true);
+        for (id, amount_cents, created_at) in [
+            (
+                "range-last-second",
+                100,
+                stamp(midnight - Duration::seconds(1)),
+            ),
+            ("range-first-second", 200, stamp(midnight)),
+        ] {
+            sqlx::query(
+                "INSERT INTO audit_log
+                 (id, event_type, outcome, actor, amount_cents, cash_flag, summary, created_at)
+                 VALUES (?, 'coin_accepted', 'success', 'system', ?, 1, 'fixture', ?)",
+            )
+            .bind(id)
+            .bind(amount_cents)
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .expect("range fixture should insert");
+        }
+
+        let summary = |from: &str, to: &str| {
+            let request = auth(client.post(format!("http://{address}/web-admin/reports/summary")))
+                .json(&serde_json::json!({ "period": "day", "from_date": from, "to_date": to }));
+            async move { request.send().await.expect("summary should complete") }
+        };
+        let total = |response: reqwest::Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response
+                .json::<serde_json::Value>()
+                .await
+                .expect("summary JSON");
+            body["cash_revenue_cents"].as_i64().expect("total")
+        };
+
+        assert_eq!(total(summary("2024-03-10", "2024-03-10").await).await, 100);
+        assert_eq!(total(summary("2024-03-11", "2024-03-11").await).await, 200);
+        assert_eq!(total(summary("2024-03-10", "2024-03-11").await).await, 300);
+        assert_eq!(total(summary("2024-03-12", "2024-03-20").await).await, 0);
+
+        let reversed = summary("2024-03-11", "2024-03-10").await;
+        assert_eq!(reversed.status(), StatusCode::BAD_REQUEST);
+        let malformed = summary("2024-3-1", "2024-03-10").await;
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+        // Well-formed but not a real calendar date.
+        let impossible = summary("2026-02-31", "2026-03-10").await;
+        assert_eq!(impossible.status(), StatusCode::BAD_REQUEST);
+        let pc_sales = auth(client.post(format!("http://{address}/web-admin/reports/pc-sales")))
+            .json(&serde_json::json!({ "from_date": "2026-03-01", "to_date": "2026-02-31" }))
+            .send()
+            .await
+            .expect("pc sales should complete");
+        assert_eq!(pc_sales.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Uncollected never goes negative, even if collections exceed sales.
+    #[tokio::test]
+    async fn cash_on_hand_never_reports_negative_uncollected() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        seed_cash_row(&pool, "neg-coin", "coin_accepted", 100).await;
+        sqlx::query("INSERT INTO cash_collections (id, kind, amount_cents) VALUES ('neg-c', 'coin_box', 500)")
+            .execute(&pool)
+            .await
+            .expect("collection fixture should insert");
+        let on_hand = db::cash_on_hand(&pool).await.expect("cash on hand");
+        assert_eq!(on_hand.coin_box.uncollected_cents, 0);
+        assert_eq!(on_hand.voucher_cash.uncollected_cents, 0);
+    }
+
+    /// Inserts one Cash Revenue audit row (the report view's source of truth).
+    async fn seed_cash_row(pool: &SqlitePool, id: &str, event_type: &str, amount_cents: i64) {
+        sqlx::query(
+            "INSERT INTO audit_log
+             (id, event_type, outcome, actor, amount_cents, cash_flag, summary)
+             VALUES (?, ?, 'success', 'system', ?, 1, 'fixture')",
+        )
+        .bind(id)
+        .bind(event_type)
+        .bind(amount_cents)
+        .execute(pool)
+        .await
+        .expect("cash row fixture should insert");
+    }
+
+    /// Cash Collection (ADR-0091): Uncollected is all-time sales of the kind
+    /// minus that kind's collections; Collect records the server-computed
+    /// amount only and never moves a revenue figure.
+    #[tokio::test]
+    async fn cash_collection_records_uncollected_and_leaves_revenue_unchanged() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "collect-pin").await;
+        let url = |path: &str| format!("http://{address}{path}");
+        let cash_on_hand = || async {
+            client
+                .get(url("/web-admin/cash-on-hand"))
+                .owner(&token)
+                .send()
+                .await
+                .expect("cash on hand should complete")
+                .json::<serde_json::Value>()
+                .await
+                .expect("cash on hand JSON")
+        };
+        let collect = |body: serde_json::Value| {
+            let request = client
+                .post(url("/web-admin/cash-collections"))
+                .owner(&token)
+                .json(&body);
+            async move { request.send().await.expect("collect should complete") }
+        };
+        let summary = || async {
+            client
+                .post(url("/web-admin/reports/summary"))
+                .owner(&token)
+                .json(&serde_json::json!({ "period": "day" }))
+                .send()
+                .await
+                .expect("summary should complete")
+                .json::<serde_json::Value>()
+                .await
+                .expect("summary JSON")
+        };
+
+        seed_cash_row(&pool, "cc-coin", "coin_accepted", 300).await;
+        seed_cash_row(&pool, "cc-credit", "rejection_credit", 100).await;
+        seed_cash_row(&pool, "cc-sold", "voucher_sold", 2_000).await;
+        seed_cash_row(&pool, "cc-redeemed", "sold_voucher_redeemed", 500).await;
+
+        // Before any collection: all-time sales are uncollected, nothing "last".
+        let before = cash_on_hand().await;
+        assert_eq!(
+            before,
+            serde_json::json!({
+                "coin_box": { "uncollected_cents": 400, "last_collection": null },
+                "voucher_cash": { "uncollected_cents": 2_500, "last_collection": null },
+            })
+        );
+        let revenue_before = summary().await;
+
+        // The amount is whatever the server computes; a client amount is ignored.
+        let response = collect(serde_json::json!({ "kind": "coin_box", "amount_cents": 1 })).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let recorded = response
+            .json::<serde_json::Value>()
+            .await
+            .expect("collect JSON");
+        assert_eq!(recorded["kind"], "coin_box");
+        assert_eq!(recorded["amount_cents"], 400);
+        assert!(recorded["collected_at"]
+            .as_str()
+            .is_some_and(|at| !at.is_empty()));
+
+        let after = cash_on_hand().await;
+        assert_eq!(after["coin_box"]["uncollected_cents"], 0);
+        assert_eq!(after["coin_box"]["last_collection"]["amount_cents"], 400);
+        assert_eq!(
+            after["coin_box"]["last_collection"]["collected_at"],
+            recorded["collected_at"]
+        );
+        // The other kind is untouched.
+        assert_eq!(after["voucher_cash"], before["voucher_cash"]);
+
+        // A second Collect at ₱0 is refused and records nothing.
+        let refused = collect(serde_json::json!({ "kind": "coin_box" })).await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cash_collections")
+            .fetch_one(&pool)
+            .await
+            .expect("collections should count");
+        assert_eq!(rows, 1);
+
+        // New sales accumulate again; the next Collect covers only them.
+        seed_cash_row(&pool, "cc-coin-2", "coin_accepted", 700).await;
+        assert_eq!(cash_on_hand().await["coin_box"]["uncollected_cents"], 700);
+        let second = collect(serde_json::json!({ "kind": "coin_box" })).await;
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(
+            second.json::<serde_json::Value>().await.expect("JSON")["amount_cents"],
+            700
+        );
+
+        let voucher = collect(serde_json::json!({ "kind": "voucher_cash" })).await;
+        assert_eq!(voucher.status(), StatusCode::OK);
+        assert_eq!(
+            voucher.json::<serde_json::Value>().await.expect("JSON")["amount_cents"],
+            2_500
+        );
+
+        // Collecting is custody only: every revenue figure is unchanged except
+        // the sales the test added itself (700 coin).
+        let revenue_after = summary().await;
+        assert_eq!(revenue_after["coin_sales_cents"], 1_100);
+        assert_eq!(
+            revenue_after["voucher_sales_cents"],
+            revenue_before["voucher_sales_cents"]
+        );
+        assert_eq!(revenue_after["cash_revenue_cents"], 3_600);
+
+        // The Audit Log records each collection under its own category, non-cash.
+        let audit = client
+            .post(url("/web-admin/audit/search"))
+            .owner(&token)
+            .json(&serde_json::json!({ "category": "custody" }))
+            .send()
+            .await
+            .expect("audit search should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("audit JSON");
+        assert_eq!(audit["total"], 3);
+        for row in audit["rows"].as_array().expect("audit rows") {
+            assert_eq!(row["event_type"], "cash_collected");
+            assert_eq!(row["cash_flag"], false);
+        }
+
+        let invalid = collect(serde_json::json!({ "kind": "piggy_bank" })).await;
+        assert!(invalid.status().is_client_error());
+    }
+
+    /// Several simultaneous Collect calls (two browser tabs) record the cash
+    /// once: one wins, the rest are refused at ₱0.
+    #[tokio::test]
+    async fn concurrent_cash_collections_record_the_cash_once() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "race-pin").await;
+        seed_cash_row(&pool, "race-coin", "coin_accepted", 100).await;
+        seed_cash_row(&pool, "race-coin-2", "coin_accepted", 500).await;
+
+        let calls = (0..8).map(|_| {
+            client
+                .post(format!("http://{address}/web-admin/cash-collections"))
+                .owner(&token)
+                .json(&serde_json::json!({ "kind": "coin_box" }))
+                .send()
+        });
+        let statuses: Vec<StatusCode> = futures_util::future::join_all(calls)
+            .await
+            .into_iter()
+            .map(|response| response.expect("collect should complete").status())
+            .collect();
+
+        assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 1);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::CONFLICT)
+                .count(),
+            7
+        );
+        let (rows, total): (i64, i64) =
+            sqlx::query_as("SELECT COUNT(*), SUM(amount_cents) FROM cash_collections")
+                .fetch_one(&pool)
+                .await
+                .expect("collections should aggregate");
+        assert_eq!((rows, total), (1, 600));
+    }
+
     #[tokio::test]
     async fn account_list_derives_last_login_and_preserves_it_for_deleted_accounts() {
         let state = test_state().await;
@@ -9214,7 +9889,7 @@ mod tests {
         let (_, newer) = update_fixture_versions();
         let mut state = test_state().await;
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-            std::sync::Mutex::new(Ok(vec![update_release(&newer, 60)])),
+            std::sync::Mutex::new(Ok(vec![update_release(&newer, db::CURRENT_SCHEMA_VERSION + 1)])),
         ));
         let installs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
@@ -9298,9 +9973,9 @@ mod tests {
         let mut state = test_state().await;
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                update_release("0.11.4", 59),
+                update_release("0.11.4", db::CURRENT_SCHEMA_VERSION),
                 update_release("0.11.3", 57),
-                update_release(env!("CARGO_PKG_VERSION"), 59),
+                update_release(env!("CARGO_PKG_VERSION"), db::CURRENT_SCHEMA_VERSION),
             ])),
         ));
         let address = spawn(state.clone()).await;
@@ -9464,7 +10139,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("data directory");
             let mut state = test_state_in(dir.path()).await;
             state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-                std::sync::Mutex::new(Ok(vec![update_release(version, 59)])),
+                std::sync::Mutex::new(Ok(vec![update_release(version, db::CURRENT_SCHEMA_VERSION)])),
             ));
             state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
                 fail_prepare: true,
@@ -9535,7 +10210,7 @@ mod tests {
         for fail_prepare in [true, false] {
             let mut state = test_state().await;
             state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-                std::sync::Mutex::new(Ok(vec![update_release(&newer, 59)])),
+                std::sync::Mutex::new(Ok(vec![update_release(&newer, db::CURRENT_SCHEMA_VERSION)])),
             ));
             state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
                 fail_prepare,
@@ -9655,7 +10330,7 @@ mod tests {
             ..Default::default()
         });
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-            std::sync::Mutex::new(Ok(vec![update_release(&newer, 59)])),
+            std::sync::Mutex::new(Ok(vec![update_release(&newer, db::CURRENT_SCHEMA_VERSION)])),
         ));
         let address = spawn(state.clone()).await;
         let client = reqwest::Client::new();
@@ -9761,14 +10436,14 @@ mod tests {
         };
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                release(&newer, 59),
-                release("0.0.0", 59),
+                release(&newer, db::CURRENT_SCHEMA_VERSION),
+                release("0.0.0", db::CURRENT_SCHEMA_VERSION),
                 release(&older, 57),
-                release(&newest, 60),
-                release(&older, 59),
-                release(&older, 60),
-                release(&preview, 59),
-                release(env!("CARGO_PKG_VERSION"), 59),
+                release(&newest, db::CURRENT_SCHEMA_VERSION + 1),
+                release(&older, db::CURRENT_SCHEMA_VERSION),
+                release(&older, db::CURRENT_SCHEMA_VERSION + 1),
+                release(&preview, db::CURRENT_SCHEMA_VERSION),
+                release(env!("CARGO_PKG_VERSION"), db::CURRENT_SCHEMA_VERSION),
             ])),
         ));
         let address = spawn(state).await;
@@ -9785,7 +10460,7 @@ mod tests {
         assert_eq!(body["available"]["version"], newest);
         assert_eq!(body["available"]["raisesSchema"], true);
         assert_eq!(body["available"]["notes"], format!("Notes for {newest}"));
-        assert_eq!(body["available"]["schemaVersion"], 60);
+        assert_eq!(body["available"]["schemaVersion"], db::CURRENT_SCHEMA_VERSION + 1);
         assert!(body["lastCheckedAt"].is_string());
         let versions: Vec<_> = body["rollbacks"]
             .as_array()
@@ -9960,7 +10635,7 @@ mod tests {
             .route("/{tag}/release.json", get(move |Path(tag): Path<String>| { let newer_tag = newer_tag.clone(); async move {
                 Json(serde_json::json!({
                     "version": tag.trim_start_matches('v'),
-                    "schema_version": if tag == newer_tag { 60 } else { 59 },
+                    "schema_version": if tag == newer_tag { db::CURRENT_SCHEMA_VERSION + 1 } else { db::CURRENT_SCHEMA_VERSION },
                     "notes": "Owner-facing release notes",
                     "pub_date": "2026-10-13T00:00:00Z",
                 }))
@@ -10128,7 +10803,7 @@ mod tests {
             .await
             .expect("JSON");
         assert_eq!(stored, failed);
-        *feed.0.lock().expect("feed") = Ok(vec![update_release(&newer, 59)]);
+        *feed.0.lock().expect("feed") = Ok(vec![update_release(&newer, db::CURRENT_SCHEMA_VERSION)]);
         let successful: serde_json::Value = client
             .post(&url)
             .owner(&auth)
@@ -10221,7 +10896,8 @@ mod tests {
         let mut state = test_state().await;
         // Deliberately differ from the binary's migration constant: the route
         // must read the applied database history, not the build's known maximum.
-        sqlx::query("INSERT INTO _openpiso_migrations (version) VALUES (60)")
+        sqlx::query("INSERT INTO _openpiso_migrations (version) VALUES (?)")
+            .bind(db::CURRENT_SCHEMA_VERSION + 1)
             .execute(&state.pool)
             .await
             .expect("applied schema fixture");
@@ -10237,10 +10913,10 @@ mod tests {
         };
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
             std::sync::Mutex::new(Ok(vec![
-                release(&newer, 60),
-                release(&older, 60),
-                release(&older, 59),
-                release(&current_build, 60),
+                release(&newer, db::CURRENT_SCHEMA_VERSION + 1),
+                release(&older, db::CURRENT_SCHEMA_VERSION + 1),
+                release(&older, db::CURRENT_SCHEMA_VERSION),
+                release(&current_build, db::CURRENT_SCHEMA_VERSION + 1),
             ])),
         ));
         let address = spawn(state).await;
@@ -10255,7 +10931,7 @@ mod tests {
             .json()
             .await
             .expect("JSON");
-        assert_eq!(body["currentSchemaVersion"], 60);
+        assert_eq!(body["currentSchemaVersion"], db::CURRENT_SCHEMA_VERSION + 1);
         assert_eq!(body["available"]["version"], newer);
         assert_eq!(body["available"]["raisesSchema"], false);
         let rollbacks = body["rollbacks"].as_array().expect("rollbacks");

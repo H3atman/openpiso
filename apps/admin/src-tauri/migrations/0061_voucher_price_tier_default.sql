@@ -32,7 +32,7 @@ INSERT INTO settings (key, value, updated_at)
 VALUES ('voucher_template_script',
   CASE WHEN EXISTS (SELECT 1 FROM voucher_default_untouched) THEN '// Tier each card by price: under 50 is low, 50 and over is high, free or unparseable gets none.
 for (const card of document.querySelectorAll("[data-price]")) {
-  const price = parseFloat(card.dataset.price.replace(/[^\d.]/g, ""));
+  const price = Number(card.dataset.price.replace(/[^\d.]/g, "")); // NaN unless the whole string is a number
   if (price > 0) card.dataset.tier = price < 50 ? "low" : "high";
 }' ELSE '' END,
   CURRENT_TIMESTAMP)

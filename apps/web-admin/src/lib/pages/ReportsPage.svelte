@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../api";
+  import CashOnHandPanel from "../components/CashOnHandPanel.svelte";
   import DailySalesChart from "../components/DailySalesChart.svelte";
   import ResponsiveRows from "../components/ResponsiveRows.svelte";
   import AttendancePager from "../components/AttendancePager.svelte";
@@ -12,14 +13,10 @@
   import { Input } from "$lib/components/ui/input";
   import { Skeleton } from "$lib/components/ui/skeleton";
   import {
-    MONTH_NAMES,
     formatAttendanceDeadline,
     formatMoney,
     formatProseDuration,
     formatSalesDateRange,
-    isoDate,
-    lastDayOfMonth,
-    monthDateRange,
     statusLabel,
   } from "../format";
   import type {
@@ -27,10 +24,18 @@
     AttendanceReportInput,
     AttendanceEarningMonthRow,
     AttendanceReportPeriod,
-    DailySalesPoint,
-    ReportBucket,
+    PcSalesReport,
+    ReportPeriod,
+    ReportSummary,
+    SalesPreset,
     SalesReportOverview,
   } from "../types";
+  import {
+    bucketFor,
+    fillSeries,
+    presetRange,
+    rangeError as salesRangeError,
+  } from "../salesRange";
 
   let salesReport = $state<SalesReportOverview | null>(null);
   let busy = $state(false);
@@ -43,72 +48,98 @@
   let attendanceToDate = $state("");
   let attendanceRequest = 0;
 
-  const today = new Date();
-  const YEAR_OPTIONS = Array.from(
-    { length: 5 },
-    (_, index) => today.getFullYear() - 4 + index,
-  );
+  const PRESETS: { id: SalesPreset; label: string }[] = [
+    { id: "today", label: "Today" },
+    { id: "week", label: "This week" },
+    { id: "month", label: "This month" },
+    { id: "last30", label: "Last 30 days" },
+  ];
 
-  let chartYear = $state(today.getFullYear());
-  let chartMonth = $state(today.getMonth() + 1);
-  let chartPoints = $state<DailySalesPoint[]>([]);
-  let chartBusy = $state(false);
-  let chartError = $state("");
-  let chartRequest = 0;
+  /** The selected range: a preset id, or "custom" with the From/To inputs below. */
+  let selected = $state<SalesPreset | "custom">("month");
+  let customFrom = $state("");
+  let customTo = $state("");
+  let customError = $state("");
+  /**
+   * The range on screen together with the results fetched for it. Replaced as
+   * one value when a load finishes, so the caption, chart and totals always
+   * describe the same period (the old one stays up while the new one loads).
+   */
+  let shown = $state<{
+    from: string;
+    to: string;
+    bucket: ReportPeriod;
+    summary: ReportSummary;
+    pcSales: PcSalesReport;
+  } | null>(null);
+  let rangeBusy = $state(false);
+  let rangeLoadError = $state("");
+  let rangeRequest = 0;
 
-  /** Expands the sparse server buckets into one point per calendar day. */
-  function dailySeries(
-    year: number,
-    month: number,
-    buckets: readonly ReportBucket[],
-  ): DailySalesPoint[] {
-    const byDate = new Map(
-      buckets.map((bucket) => [bucket.period_label, bucket.cash_revenue_cents]),
-    );
-    return Array.from({ length: lastDayOfMonth(year, month) }, (_, index) => {
-      const date = isoDate(year, month, index + 1);
-      return { date, cents: byDate.get(date) ?? 0 };
-    });
-  }
+  /**
+   * The admin host owns the business date; it comes from the overview. Until
+   * that loads (or if it fails) no range is requested: the browser clock must
+   * never anchor a range. Days after it are unwritten, not zero-revenue, so
+   * they are left off the plot.
+   */
+  let businessToday = $state<string | null>(null);
 
-  async function loadDailySales(year: number, month: number): Promise<void> {
-    const request = ++chartRequest;
-    chartBusy = true;
-    chartError = "";
-    const [fromDate, toDate] = monthDateRange(year, month);
+  async function loadRange(from: string, to: string): Promise<void> {
+    const request = ++rangeRequest;
+    const bucket = bucketFor(from, to);
+    rangeBusy = true;
+    rangeLoadError = "";
     try {
-      const summary = await api.getReportSummary("day", fromDate, toDate);
-      if (request !== chartRequest) return;
-      chartPoints = dailySeries(year, month, summary.buckets);
+      const [summary, perPc] = await Promise.all([
+        api.getReportSummary(bucket, from, to),
+        api.getPcSales(from, to),
+      ]);
+      if (request !== rangeRequest) return;
+      shown = { from, to, bucket, summary, pcSales: perPc };
     } catch (caught) {
-      if (request !== chartRequest) return;
-      chartPoints = [];
-      chartError = caught instanceof Error ? caught.message : String(caught);
+      if (request !== rangeRequest) return;
+      shown = null;
+      rangeLoadError = caught instanceof Error ? caught.message : String(caught);
     } finally {
-      if (request === chartRequest) chartBusy = false;
+      if (request === rangeRequest) rangeBusy = false;
     }
   }
 
-  let chartCaption = $derived(formatSalesDateRange(...monthDateRange(chartYear, chartMonth)));
+  function selectPreset(preset: SalesPreset): void {
+    if (!businessToday) return;
+    selected = preset;
+    customError = "";
+    void loadRange(...presetRange(preset, businessToday));
+  }
 
-  /**
-   * The admin host owns the business date, so prefer the one the overview
-   * reports and fall back to the browser clock only until it loads. Days after
-   * it are unwritten, not zero-revenue, so they are left off the plot.
-   */
-  let businessToday = $derived(
-    salesReport?.daily.to_date ??
-      isoDate(today.getFullYear(), today.getMonth() + 1, today.getDate()),
+  function applyCustom(): void {
+    const problem = salesRangeError(customFrom, customTo);
+    customError = problem ?? "";
+    if (!problem && businessToday) void loadRange(customFrom, customTo);
+  }
+
+  let chartCaption = $derived(shown ? formatSalesDateRange(shown.from, shown.to) : "");
+  let chartSeries = $derived(
+    shown && businessToday
+      ? fillSeries(shown.bucket, shown.from, shown.to, shown.summary.buckets, businessToday)
+      : [],
   );
-  let chartSeries = $derived(chartPoints.filter((point) => point.date <= businessToday));
-
-  $effect(() => {
-    void loadDailySales(chartYear, chartMonth);
-  });
+  let rangeSummary = $derived(shown?.summary ?? null);
+  let pcSales = $derived(shown?.pcSales ?? null);
 
   function salesPeriodRange(period: SalesReportOverview["daily"] | undefined): string {
     return period ? formatSalesDateRange(period.from_date, period.to_date) : "";
   }
+
+  /** Each PC, then the Cash Revenue that belongs to no PC (single-mint sold vouchers). */
+  let pcSalesRows = $derived(
+    pcSales
+      ? [
+          ...pcSales.pcs,
+          { id: "unassigned", name: "Unassigned", ...pcSales.unassigned },
+        ]
+      : [],
+  );
 
   /** Earning Month state pill colours; the label text always carries the state. */
   const STATE_STYLE: Record<AttendanceEarningMonthRow["state"], string> = {
@@ -219,11 +250,13 @@
     salesReport = null;
     try {
       salesReport = await api.getSalesReportOverview();
+      businessToday = salesReport.daily.to_date;
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     } finally {
       busy = false;
     }
+    if (businessToday) selectPreset("month");
   }
 
   onMount(() => {
@@ -311,141 +344,151 @@
     {/if}
   </section>
 
+  <CashOnHandPanel />
+
   <section class="rounded-lg border bg-card" aria-labelledby="daily-trend-heading">
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+    <div class="space-y-3 border-b px-4 py-3">
       <div class="min-w-0">
-        <h3 id="daily-trend-heading" class="font-semibold">Daily Sales Trend</h3>
+        <h3 id="daily-trend-heading" class="font-semibold">Sales Trend</h3>
         <p class="text-xs text-muted-foreground">{chartCaption}</p>
       </div>
-      <div class="grid w-full grid-cols-2 gap-2 md:flex md:w-auto">
-        <label for="sales-chart-month" class="sr-only">Month</label>
-        <NativeSelect id="sales-chart-month" class="md:w-36" bind:value={chartMonth}>
-          {#each MONTH_NAMES as name, index}
-            <option value={index + 1}>{name}</option>
-          {/each}
-        </NativeSelect>
-        <label for="sales-chart-year" class="sr-only">Year</label>
-        <NativeSelect id="sales-chart-year" class="md:w-24" bind:value={chartYear}>
-          {#each YEAR_OPTIONS as year}
-            <option value={year}>{year}</option>
-          {/each}
-        </NativeSelect>
+      <div class="flex flex-wrap items-end gap-2" role="group" aria-label="Sales range">
+        {#each PRESETS as preset (preset.id)}
+          <Button
+            size="sm"
+            variant={selected === preset.id ? "default" : "outline"}
+            aria-pressed={selected === preset.id}
+            onclick={() => selectPreset(preset.id)}
+          >
+            {preset.label}
+          </Button>
+        {/each}
+        <Button
+          size="sm"
+          variant={selected === "custom" ? "default" : "outline"}
+          aria-pressed={selected === "custom"}
+          onclick={() => (selected = "custom")}
+        >
+          Custom
+        </Button>
       </div>
+      {#if selected === "custom"}
+        <div class="grid grid-cols-2 gap-3 md:flex md:items-end">
+          <div class="min-w-0 md:w-40">
+            <label for="sales-from-date" class="mb-1.5 block text-xs font-medium text-muted-foreground">Sales from</label>
+            <Input id="sales-from-date" type="date" class="dark:scheme-dark" max={customTo || undefined} bind:value={customFrom} />
+          </div>
+          <div class="min-w-0 md:w-40">
+            <label for="sales-to-date" class="mb-1.5 block text-xs font-medium text-muted-foreground">Sales to</label>
+            <Input id="sales-to-date" type="date" class="dark:scheme-dark" min={customFrom || undefined} bind:value={customTo} />
+          </div>
+          <Button class="col-span-2 md:col-span-1" disabled={rangeBusy} onclick={applyCustom}>Apply range</Button>
+        </div>
+        {#if customError}
+          <p class="text-sm text-destructive" role="alert">{customError}</p>
+        {/if}
+      {/if}
     </div>
 
-    <div class="p-4">
-      {#if chartError}
+    <div class="space-y-4 p-4">
+      {#if rangeLoadError}
         <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
-          Couldn't load daily sales: {chartError}
+          Couldn't load sales: {rangeLoadError}
         </div>
-      {:else if chartBusy && chartPoints.length === 0}
-        <div role="status">
-          <span class="sr-only">Loading daily sales…</span>
-          <Skeleton class="h-[12.5rem] md:h-[15rem]" />
+      {:else if rangeSummary}
+        <section
+          class="grid grid-cols-3 gap-3"
+          aria-label="Selected range summary"
+        >
+          {@render tile("Coin Sales", formatMoney(rangeSummary.coin_sales_cents))}
+          {@render tile("Voucher Sales", formatMoney(rangeSummary.voucher_sales_cents))}
+          {@render tile("Cash Revenue", formatMoney(rangeSummary.cash_revenue_cents))}
+        </section>
+        <DailySalesChart points={chartSeries} caption={chartCaption} bucket={shown?.bucket} />
+      {:else if !businessToday && !busy}
+        <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+          Couldn't load sales: the Admin's business date is unavailable.
         </div>
       {:else}
-        <DailySalesChart points={chartSeries} caption={chartCaption} />
+        <div role="status">
+          <span class="sr-only">Loading sales…</span>
+          <Skeleton class="h-[12.5rem] md:h-[15rem]" />
+        </div>
       {/if}
     </div>
   </section>
 
-  {#if salesReport}
+  {#if pcSales}
     <section class="rounded-lg border bg-card" aria-labelledby="pc-breakdown-heading">
       <div class="flex items-baseline justify-between gap-3 border-b px-4 py-3">
         <h3 id="pc-breakdown-heading" class="font-semibold">PC Breakdown</h3>
-        {#if salesReport.pcs.length > 0}
-          <p class="text-xs text-muted-foreground">
-            {salesReport.pcs.length} {salesReport.pcs.length === 1 ? "PC" : "PCs"}
-          </p>
-        {/if}
+        <p class="text-xs text-muted-foreground">{formatSalesDateRange(pcSales.from_date, pcSales.to_date)}</p>
       </div>
 
-      {#if salesReport.pcs.length > 0}
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <caption class="sr-only">Sales breakdown by PC</caption>
-            <thead>
-              <tr class="border-b text-left text-xs text-muted-foreground max-md:hidden">
-                <th scope="col" class="px-4 py-2 font-medium">PC</th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Daily Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.daily)}</span>
-                </th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Weekly Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.weekly)}</span>
-                </th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Monthly Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.monthly)}</span>
-                </th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Total Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.total)}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y">
-              <ResponsiveRows rows={salesReport.pcs}>
-                {#snippet row(pc)}
-                  <tr class="hover:bg-muted/50">
-                    <th scope="row" class="px-4 py-2.5 text-left font-medium">{pc.name}</th>
-                    {#each [pc.daily_sales_cents, pc.weekly_sales_cents, pc.monthly_sales_cents] as cents}
-                      <td class="px-4 py-2.5 text-right tabular-nums {cents === 0 ? 'text-muted-foreground' : ''}">
-                        {formatMoney(cents)}
-                      </td>
-                    {/each}
-                    <td
-                      class="px-4 py-2.5 text-right font-semibold tabular-nums {pc.total_sales_cents === 0 ? 'text-muted-foreground' : ''}"
-                    >
-                      {formatMoney(pc.total_sales_cents)}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <caption class="sr-only">Sales breakdown by PC</caption>
+          <thead>
+            <tr class="border-b text-left text-xs text-muted-foreground max-md:hidden">
+              <th scope="col" class="px-4 py-2 font-medium">PC</th>
+              <th scope="col" class="px-4 py-2 text-right font-medium">Coin Sales</th>
+              <th scope="col" class="px-4 py-2 text-right font-medium">Voucher Sales</th>
+              <th scope="col" class="px-4 py-2 text-right font-medium">Cash Revenue</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <ResponsiveRows rows={pcSalesRows}>
+              {#snippet row(pc)}
+                <tr class="hover:bg-muted/50">
+                  <th scope="row" class="px-4 py-2.5 text-left font-medium">{pc.name}</th>
+                  {#each [pc.coin_sales_cents, pc.voucher_sales_cents] as cents}
+                    <td class="px-4 py-2.5 text-right tabular-nums {cents === 0 ? 'text-muted-foreground' : ''}">
+                      {formatMoney(cents)}
                     </td>
-                  </tr>
-                {/snippet}
-                {#snippet card(pc)}
-                  {@const figures = [
-                    { label: "Daily Sales", cents: pc.daily_sales_cents },
-                    { label: "Weekly Sales", cents: pc.weekly_sales_cents },
-                    { label: "Monthly Sales", cents: pc.monthly_sales_cents },
-                    { label: "Total Sales", cents: pc.total_sales_cents },
-                  ]}
-                  <tr>
-                    <td colspan="5" class="px-4 py-3">
-                      <article aria-label={pc.name}>
-                        <!-- `wrap-anywhere`, not `break-words`: this card is a
-                             single colspan cell in an auto-layout table, and
-                             only `overflow-wrap: anywhere` lowers the cell's
-                             min-content width enough for the table to stop
-                             widening past the phone viewport. -->
-                        <h4 class="font-semibold max-md:wrap-anywhere">{pc.name}</h4>
-                        <dl class="mt-2 space-y-1.5">
-                          {#each figures as figure}
-                            <div class="flex items-baseline justify-between gap-3">
-                              <dt class="min-w-0 text-sm text-muted-foreground">
-                                {figure.label}
-                              </dt>
-                              <dd
-                                class="tabular-nums {figure.label === 'Total Sales' ? 'font-semibold' : 'font-medium'} {figure.cents === 0 ? 'text-muted-foreground' : ''}"
-                              >
-                                {formatMoney(figure.cents)}
-                              </dd>
-                            </div>
-                          {/each}
-                        </dl>
-                      </article>
-                    </td>
-                  </tr>
-                {/snippet}
-              </ResponsiveRows>
-            </tbody>
-          </table>
-        </div>
-      {:else}
-        <p class="px-4 py-10 text-center text-sm text-muted-foreground">
-          No PCs registered. Add one in
-          <a class="font-medium text-foreground underline underline-offset-2 hover:no-underline" href="/admin/settings/pcs">Settings → PCs</a>.
-        </p>
-      {/if}
+                  {/each}
+                  <td class="px-4 py-2.5 text-right font-semibold tabular-nums">
+                    {formatMoney(pc.coin_sales_cents + pc.voucher_sales_cents)}
+                  </td>
+                </tr>
+              {/snippet}
+              {#snippet card(pc)}
+                {@const figures = [
+                  { label: "Coin Sales", cents: pc.coin_sales_cents },
+                  { label: "Voucher Sales", cents: pc.voucher_sales_cents },
+                  { label: "Cash Revenue", cents: pc.coin_sales_cents + pc.voucher_sales_cents },
+                ]}
+                <tr>
+                  <td colspan="4" class="px-4 py-3">
+                    <article aria-label={pc.name}>
+                      <!-- `wrap-anywhere`, not `break-words`: this card is a
+                           single colspan cell in an auto-layout table, and
+                           only `overflow-wrap: anywhere` lowers the cell's
+                           min-content width enough for the table to stop
+                           widening past the phone viewport. -->
+                      <h4 class="font-semibold max-md:wrap-anywhere">{pc.name}</h4>
+                      <dl class="mt-2 space-y-1.5">
+                        {#each figures as figure}
+                          <div class="flex items-baseline justify-between gap-3">
+                            <dt class="min-w-0 text-sm text-muted-foreground">{figure.label}</dt>
+                            <dd
+                              class="tabular-nums {figure.label === 'Cash Revenue' ? 'font-semibold' : 'font-medium'} {figure.cents === 0 ? 'text-muted-foreground' : ''}"
+                            >
+                              {formatMoney(figure.cents)}
+                            </dd>
+                          </div>
+                        {/each}
+                      </dl>
+                    </article>
+                  </td>
+                </tr>
+              {/snippet}
+            </ResponsiveRows>
+          </tbody>
+        </table>
+      </div>
+      <p class="border-t px-4 py-2 text-xs text-muted-foreground">
+        Batch-sold voucher cash counts at the PC where the card was redeemed. Unassigned is voucher cash sold at the counter with no PC.
+      </p>
     </section>
   {/if}
 

@@ -6,10 +6,15 @@ import { formatMoney, formatMoneyCompact } from "../format";
 import type { DailySalesPoint } from "../types";
 
 const points: DailySalesPoint[] = [
-  { date: "2026-08-01", cents: 0 },
-  { date: "2026-08-02", cents: 1_500 },
-  { date: "2026-08-03", cents: 500 },
+  { date: "2026-08-01", coin_cents: 0, voucher_cents: 0 },
+  { date: "2026-08-02", coin_cents: 1_200, voucher_cents: 300 },
+  { date: "2026-08-03", coin_cents: 500, voucher_cents: 0 },
 ];
+
+/** A day with only Coin Sales, for tests that don't care about the split. */
+function coinDay(date: string, cents: number): DailySalesPoint {
+  return { date, coin_cents: cents, voucher_cents: 0 };
+}
 
 function renderChart(
   overrides: Partial<{ points: DailySalesPoint[]; caption: string }> = {},
@@ -29,12 +34,31 @@ describe("DailySalesChart", () => {
     expect(rows).toHaveLength(3);
   });
 
-  it("exposes the same values as an accessible table", () => {
+  it("exposes Coin Sales, Voucher Sales and the total as an accessible table", () => {
     const view = renderChart();
 
     const table = view.getByRole("table");
-    expect(table.textContent).toContain(formatMoney(1_500));
-    expect(table.textContent).toContain(formatMoney(500));
+    const headers = [...table.querySelectorAll("thead th")].map(
+      (cell) => cell.textContent,
+    );
+    expect(headers).toEqual(["Date", "Coin Sales", "Voucher Sales", "Total"]);
+    const busiest = [...table.querySelectorAll("tbody tr")][1];
+    const cells = [...(busiest?.querySelectorAll("td") ?? [])].map(
+      (cell) => cell.textContent,
+    );
+    expect(cells).toEqual([
+      formatMoney(1_200),
+      formatMoney(300),
+      formatMoney(1_500),
+    ]);
+  });
+
+  it("stacks Coin Sales and Voucher Sales as two series", async () => {
+    const view = renderChart();
+
+    await vi.waitFor(() => {
+      expect(view.container.querySelectorAll(".lc-area-path")).toHaveLength(2);
+    });
   });
 
   it("hides the table's caption from the page, not just the table", () => {
@@ -50,24 +74,22 @@ describe("DailySalesChart", () => {
   it("reports an empty state instead of an empty plot", () => {
     const view = renderChart({ points: [] });
 
-    expect(view.getByText("No sales recorded for this month.")).toBeTruthy();
+    expect(view.getByText("No sales recorded for this range.")).toBeTruthy();
     expect(view.queryByRole("img")).toBeNull();
   });
 
-  it("reports no sales rather than plotting a flat line on a zero month", () => {
+  it("plots zero buckets on a quiet range with a note, instead of replacing the chart", () => {
     const view = renderChart({
-      points: [
-        { date: "2026-08-01", cents: 0 },
-        { date: "2026-08-02", cents: 0 },
-      ],
+      points: [coinDay("2026-08-01", 0), coinDay("2026-08-02", 0)],
     });
 
-    expect(view.getByText("No sales recorded for this month.")).toBeTruthy();
-    expect(view.queryByRole("img")).toBeNull();
+    expect(view.getByText("No sales recorded for this range.")).toBeTruthy();
+    expect(view.getByRole("img")).toBeTruthy();
+    expect(view.getByRole("table").querySelectorAll("tbody tr")).toHaveLength(2);
   });
 
   it("keeps every gridline label on whole cents", () => {
-    const view = renderChart({ points: [{ date: "2026-08-01", cents: 3 }] });
+    const view = renderChart({ points: [coinDay("2026-08-01", 3)] });
     const labels = [...view.container.querySelectorAll("text")].map(
       (node) => node.textContent ?? "",
     );
@@ -78,10 +100,9 @@ describe("DailySalesChart", () => {
 
   it("keeps the first and every fifth day on the x-axis", () => {
     const view = renderChart({
-      points: Array.from({ length: 11 }, (_, index) => ({
-        date: `2026-08-${String(index + 1).padStart(2, "0")}`,
-        cents: 100,
-      })),
+      points: Array.from({ length: 11 }, (_, index) =>
+        coinDay(`2026-08-${String(index + 1).padStart(2, "0")}`, 100),
+      ),
     });
     const labels = [
       ...view.container.querySelectorAll(
@@ -94,7 +115,7 @@ describe("DailySalesChart", () => {
 
   it("marks a single sales day", async () => {
     const view = renderChart({
-      points: [{ date: "2026-08-01", cents: 1_500 }],
+      points: [coinDay("2026-08-01", 1_500)],
     });
 
     await vi.waitFor(() => {
@@ -110,7 +131,7 @@ describe("DailySalesChart", () => {
     expect(peak).toContain(formatMoney(1_500));
   });
 
-  it("shows the cursor date and formatted sales value", async () => {
+  it("shows the cursor date, each part and the total", async () => {
     const view = renderChart();
     const target = view.container.querySelector<SVGElement>(
       ".lc-tooltip-context",
@@ -145,9 +166,13 @@ describe("DailySalesChart", () => {
       target.dispatchEvent(new PointerEvent("pointerenter", event));
       target.dispatchEvent(new PointerEvent("pointermove", event));
 
-      const tooltip = view.getByTestId("sales-tooltip").textContent ?? "";
+      const tooltip = (
+        view.getByTestId("sales-tooltip").textContent ?? ""
+      ).replace(/\s+/g, " ");
       expect(tooltip).toContain("Aug 2, 2026");
-      expect(tooltip).toContain(formatMoney(1_500));
+      expect(tooltip).toContain(`Coin Sales ${formatMoney(1_200)}`);
+      expect(tooltip).toContain(`Voucher Sales ${formatMoney(300)}`);
+      expect(tooltip).toContain(`Total ${formatMoney(1_500)}`);
     });
   });
 });

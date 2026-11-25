@@ -352,10 +352,11 @@ export interface WheelSettingsInput {
   segments: WheelSegmentRow[];
 }
 
+/** Today's Cash Revenue for the Admin's business date (same source as the Sales Report). */
 export interface TodayReport {
-  sales_cents: number;
-  transaction_count: number;
-  seconds_sold: number;
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+  cash_revenue_cents: number;
 }
 
 export interface DashboardSnapshot {
@@ -423,8 +424,15 @@ export interface OwnerAuth {
 
 export type ReportPeriod = "day" | "week" | "month";
 
+/** Quick ranges on the Sales Report; "custom" is the page's From/To inputs. */
+export type SalesPreset = "today" | "week" | "month" | "last30";
+
 export interface ReportBucket {
+  /** `YYYY-MM-DD` for day buckets, the week's Monday for week buckets, `YYYY-MM` for months. */
   period_label: string;
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+  /** Always `coin_sales_cents + voucher_sales_cents`. */
   cash_revenue_cents: number;
   free_time_dispensed_seconds: number;
   points_minted_by_wheel_centi: number;
@@ -434,6 +442,9 @@ export interface ReportSummary {
   period: ReportPeriod;
   from_date: string;
   to_date: string;
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+  /** Always `coin_sales_cents + voucher_sales_cents`. */
   cash_revenue_cents: number;
   free_time_dispensed_seconds: number;
   points_minted_by_wheel_centi: number;
@@ -444,7 +455,8 @@ export interface ReportSummary {
 /** One day of the daily sales trend, derived from `ReportSummary.buckets`. */
 export interface DailySalesPoint {
   date: string;
-  cents: number;
+  coin_cents: number;
+  voucher_cents: number;
 }
 
 export interface PcReport {
@@ -470,6 +482,25 @@ export interface SalesReportPc {
   weekly_sales_cents: number;
   monthly_sales_cents: number;
   total_sales_cents: number;
+}
+
+/** Coin Sales and Voucher Sales for one PC, or for the unassigned row. */
+export interface SalesSplit {
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+}
+
+export interface PcSalesRow extends SalesSplit {
+  id: string;
+  name: string;
+}
+
+/** Ranged per-PC sales; the PC rows plus `unassigned` sum to the range's Cash Revenue. */
+export interface PcSalesReport {
+  from_date: string;
+  to_date: string;
+  pcs: PcSalesRow[];
+  unassigned: SalesSplit;
 }
 
 export interface SalesReportOverview {
@@ -634,7 +665,8 @@ export type AuditCategory =
   | "time"
   | "points"
   | "admin"
-  | "system";
+  | "system"
+  | "custody";
 
 export interface AuditFilter {
   limit?: number;
@@ -1211,3 +1243,22 @@ export interface AppUpdateState {
 // Centralized theme (ADR-0035): the raw record is defined next to the ramp
 // generator in @openpiso/ui; re-exported here so app code has one types entry.
 export type { ThemeMode, ThemeRecord } from "@openpiso/ui";
+
+export type CashCollectionKind = "coin_box" | "voucher_cash";
+
+export interface CashOnHandKind {
+  uncollected_cents: number;
+  last_collection: { amount_cents: number; collected_at: string } | null;
+}
+
+export interface CashOnHand {
+  coin_box: CashOnHandKind;
+  voucher_cash: CashOnHandKind;
+}
+
+/** What Collect recorded; the amount is computed by the Admin, never sent. */
+export interface CashCollection {
+  kind: CashCollectionKind;
+  amount_cents: number;
+  collected_at: string;
+}

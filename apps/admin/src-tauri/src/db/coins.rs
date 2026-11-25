@@ -15,7 +15,8 @@ use crate::{
     models::{CoinEventInput, CoinSourceClaim, CoinTarget, CoinTransaction, TodayReport},
 };
 
-use chrono::Utc;
+use chrono::{Local, Utc};
+use openpiso_core::report::ReportPeriod;
 
 pub const LOCAL_SERIAL_DEVICE_ID: &str = "central-terminal-serial";
 
@@ -187,18 +188,17 @@ pub async fn transactions(pool: &SqlitePool, limit: i64) -> AppResult<Vec<CoinTr
     .collect())
 }
 
+/// Today's Coin Sales, Voucher Sales and Cash Revenue from the canonical
+/// reporting view (ADR-0014), bucketed by the Admin PC's local date.
 pub async fn today_report(pool: &SqlitePool) -> AppResult<TodayReport> {
-    let report = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT
-           COALESCE(SUM(amount_cents), 0) AS sales_cents,
-           COUNT(*) AS transaction_count,
-           COALESCE(SUM(seconds_added), 0) AS seconds_sold
-         FROM coin_transactions
-         WHERE date(created_at, 'localtime') = date('now', 'localtime')",
-    )
-    .fetch_one(pool)
-    .await?;
-    Ok(TodayReport::from(report))
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let summary =
+        crate::reports::report_summary(pool, ReportPeriod::Day, Some(&today), Some(&today)).await?;
+    Ok(TodayReport {
+        coin_sales_cents: summary.coin_sales_cents,
+        voucher_sales_cents: summary.voucher_sales_cents,
+        cash_revenue_cents: summary.cash_revenue_cents,
+    })
 }
 
 #[cfg(test)]

@@ -155,9 +155,9 @@ const busy: DashboardSnapshot = {
   pcs,
   recent_transactions: recentTransactions,
   today: {
-    sales_cents: 184_500,
-    transaction_count: 312,
-    seconds_sold: 553_500,
+    coin_sales_cents: 154_500,
+    voucher_sales_cents: 30_000,
+    cash_revenue_cents: 184_500,
   },
   pc_monitoring: {
     enabled: false,
@@ -185,7 +185,7 @@ const empty: DashboardSnapshot = {
   ...quiet,
   pcs: [],
   recent_transactions: [],
-  today: { sales_cents: 0, transaction_count: 0, seconds_sold: 0 },
+  today: { coin_sales_cents: 0, voucher_sales_cents: 0, cash_revenue_cents: 0 },
 };
 
 const scenarios: Record<string, DashboardSnapshot> = { busy, quiet, empty };
