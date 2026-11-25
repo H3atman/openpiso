@@ -17,7 +17,6 @@
     formatMoney,
     formatProseDuration,
     formatSalesDateRange,
-    isoDate,
     statusLabel,
   } from "../format";
   import type {
@@ -26,7 +25,9 @@
     AttendanceEarningMonthRow,
     AttendanceReportPeriod,
     PcSalesReport,
+    ReportPeriod,
     ReportSummary,
+    SalesPreset,
     SalesReportOverview,
   } from "../types";
   import {
@@ -34,8 +35,6 @@
     fillSeries,
     presetRange,
     rangeError as salesRangeError,
-    type SalesBucket,
-    type SalesPreset,
   } from "../salesRange";
 
   let salesReport = $state<SalesReportOverview | null>(null);
@@ -61,47 +60,45 @@
   let customFrom = $state("");
   let customTo = $state("");
   let customError = $state("");
-  let rangeSummary = $state<ReportSummary | null>(null);
-  let pcSales = $state<PcSalesReport | null>(null);
-  let rangeBucket = $state<SalesBucket>("day");
-  let rangeFrom = $state("");
-  let rangeTo = $state("");
+  /**
+   * The range on screen together with the results fetched for it. Replaced as
+   * one value when a load finishes, so the caption, chart and totals always
+   * describe the same period (the old one stays up while the new one loads).
+   */
+  let shown = $state<{
+    from: string;
+    to: string;
+    bucket: ReportPeriod;
+    summary: ReportSummary;
+    pcSales: PcSalesReport;
+  } | null>(null);
   let rangeBusy = $state(false);
   let rangeLoadError = $state("");
   let rangeRequest = 0;
 
   /**
-   * The admin host owns the business date, so prefer the one the overview
-   * reports and fall back to the browser clock only if it fails to load. Days
-   * after it are unwritten, not zero-revenue, so they are left off the plot.
+   * The admin host owns the business date; it comes from the overview. Until
+   * that loads (or if it fails) no range is requested: the browser clock must
+   * never anchor a range. Days after it are unwritten, not zero-revenue, so
+   * they are left off the plot.
    */
-  let businessToday = $state(browserToday());
-
-  function browserToday(): string {
-    const now = new Date();
-    return isoDate(now.getFullYear(), now.getMonth() + 1, now.getDate());
-  }
+  let businessToday = $state<string | null>(null);
 
   async function loadRange(from: string, to: string): Promise<void> {
     const request = ++rangeRequest;
     const bucket = bucketFor(from, to);
     rangeBusy = true;
     rangeLoadError = "";
-    rangeFrom = from;
-    rangeTo = to;
-    rangeBucket = bucket;
     try {
       const [summary, perPc] = await Promise.all([
         api.getReportSummary(bucket, from, to),
         api.getPcSales(from, to),
       ]);
       if (request !== rangeRequest) return;
-      rangeSummary = summary;
-      pcSales = perPc;
+      shown = { from, to, bucket, summary, pcSales: perPc };
     } catch (caught) {
       if (request !== rangeRequest) return;
-      rangeSummary = null;
-      pcSales = null;
+      shown = null;
       rangeLoadError = caught instanceof Error ? caught.message : String(caught);
     } finally {
       if (request === rangeRequest) rangeBusy = false;
@@ -109,6 +106,7 @@
   }
 
   function selectPreset(preset: SalesPreset): void {
+    if (!businessToday) return;
     selected = preset;
     customError = "";
     void loadRange(...presetRange(preset, businessToday));
@@ -117,15 +115,17 @@
   function applyCustom(): void {
     const problem = salesRangeError(customFrom, customTo);
     customError = problem ?? "";
-    if (!problem) void loadRange(customFrom, customTo);
+    if (!problem && businessToday) void loadRange(customFrom, customTo);
   }
 
-  let chartCaption = $derived(rangeFrom ? formatSalesDateRange(rangeFrom, rangeTo) : "");
+  let chartCaption = $derived(shown ? formatSalesDateRange(shown.from, shown.to) : "");
   let chartSeries = $derived(
-    rangeSummary
-      ? fillSeries(rangeBucket, rangeFrom, rangeTo, rangeSummary.buckets, businessToday)
+    shown && businessToday
+      ? fillSeries(shown.bucket, shown.from, shown.to, shown.summary.buckets, businessToday)
       : [],
   );
+  let rangeSummary = $derived(shown?.summary ?? null);
+  let pcSales = $derived(shown?.pcSales ?? null);
 
   function salesPeriodRange(period: SalesReportOverview["daily"] | undefined): string {
     return period ? formatSalesDateRange(period.from_date, period.to_date) : "";
@@ -250,13 +250,13 @@
     salesReport = null;
     try {
       salesReport = await api.getSalesReportOverview();
-      businessToday = salesReport.daily.to_date ?? businessToday;
+      businessToday = salesReport.daily.to_date;
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     } finally {
       busy = false;
     }
-    selectPreset("month");
+    if (businessToday) selectPreset("month");
   }
 
   onMount(() => {
@@ -404,7 +404,11 @@
           {@render tile("Voucher Sales", formatMoney(rangeSummary.voucher_sales_cents))}
           {@render tile("Cash Revenue", formatMoney(rangeSummary.cash_revenue_cents))}
         </section>
-        <DailySalesChart points={chartSeries} caption={chartCaption} bucket={rangeBucket} />
+        <DailySalesChart points={chartSeries} caption={chartCaption} bucket={shown?.bucket} />
+      {:else if !businessToday && !busy}
+        <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+          Couldn't load sales: the Admin's business date is unavailable.
+        </div>
       {:else}
         <div role="status">
           <span class="sr-only">Loading sales…</span>

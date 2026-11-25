@@ -78,16 +78,14 @@ describe("DailySalesChart", () => {
     expect(view.queryByRole("img")).toBeNull();
   });
 
-  it("reports no sales rather than plotting a flat line on a zero month", () => {
+  it("plots zero buckets on a quiet range with a note, instead of replacing the chart", () => {
     const view = renderChart({
-      points: [
-        coinDay("2026-08-01", 0),
-        coinDay("2026-08-02", 0),
-      ],
+      points: [coinDay("2026-08-01", 0), coinDay("2026-08-02", 0)],
     });
 
     expect(view.getByText("No sales recorded for this range.")).toBeTruthy();
-    expect(view.queryByRole("img")).toBeNull();
+    expect(view.getByRole("img")).toBeTruthy();
+    expect(view.getByRole("table").querySelectorAll("tbody tr")).toHaveLength(2);
   });
 
   it("keeps every gridline label on whole cents", () => {

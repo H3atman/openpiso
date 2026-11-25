@@ -3,15 +3,14 @@
   import { curveLinear } from "d3-shape";
   import { AreaChart } from "layerchart";
   import * as Chart from "$lib/components/ui/chart/index.js";
-  import { formatMoney, formatMoneyCompact, formatReportDate } from "../format";
-  import type { DailySalesPoint } from "../types";
-  import type { SalesBucket } from "../salesRange";
+  import { axisLabel, formatMoney, formatMoneyCompact, formatReportDate } from "../format";
+  import type { DailySalesPoint, ReportPeriod } from "../types";
 
   interface Props {
     points: readonly DailySalesPoint[];
     caption: string;
     /** What one bar covers; day bars are labelled by date, others by their start. */
-    bucket?: SalesBucket;
+    bucket?: ReportPeriod;
   }
 
   interface ChartPoint {
@@ -68,12 +67,6 @@
 
   function toMoney(value: unknown): string {
     return typeof value === "number" ? formatMoney(value) : "";
-  }
-
-  function axisLabel(value: Date): string {
-    if (bucket === "day") return String(value.getUTCDate());
-    const month = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(value);
-    return bucket === "week" ? `${month} ${value.getUTCDate()}` : `${month} ${value.getUTCFullYear()}`;
   }
 
   let hasSales = $derived(points.some((point) => totalCents(point) > 0));
@@ -134,7 +127,7 @@
   {/if}
 {/snippet}
 
-{#if !hasSales}
+{#if points.length === 0}
   <!-- Same footprint as the plot, so switching ranges does not jump the page. -->
   <div
     class="text-muted-foreground flex h-[12.5rem] items-center justify-center rounded-md border border-dashed text-sm md:h-[15rem]"
@@ -143,6 +136,9 @@
   </div>
 {:else}
   <figure class="m-0">
+    {#if !hasSales}
+      <p class="text-muted-foreground mb-3 text-sm">No sales recorded for this range.</p>
+    {/if}
     {#if peak}
       <div
         data-testid="sales-peak"
@@ -188,7 +184,7 @@
             line: { class: "stroke-2" },
             motion: "tween",
           },
-          xAxis: { format: axisLabel, ticks: xTicks },
+          xAxis: { format: (value: Date) => axisLabel(bucket, value), ticks: xTicks },
           yAxis: { format: formatMoneyCompact, ticks: 4 },
         }}
       >

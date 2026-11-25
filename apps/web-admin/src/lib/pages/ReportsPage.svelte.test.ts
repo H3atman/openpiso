@@ -13,7 +13,7 @@ vi.mock("../api", () => ({
   collectCash: vi.fn(),
 }));
 
-import { fireEvent, render, waitFor, within } from "@testing-library/svelte";
+import { fireEvent, render, waitFor, within, type RenderResult } from "@testing-library/svelte";
 import * as api from "../api";
 import ReportsPage from "./ReportsPage.svelte";
 import { formatMoney } from "../format";
@@ -167,8 +167,7 @@ const attendanceReport = {
 };
 
 
-const renderPage = () => render(ReportsPage);
-type View = ReturnType<typeof renderPage>;
+type View = RenderResult<typeof ReportsPage>;
 
 describe("Sales Report", () => {
   beforeEach(() => {
@@ -231,6 +230,36 @@ describe("Sales Report", () => {
         .filter((row) => row.querySelector("td"));
       expect(line(next[0])[3]).toBe(formatMoney(100));
     });
+  });
+
+  it("keeps the caption, chart and totals on one period until the new range arrives", async () => {
+    const view = render(ReportsPage);
+    await waitFor(() => expect(view.getAllByText("Aug 1–31, 2026").length).toBeGreaterThan(0));
+
+    let release: (value: typeof dailySummary) => void = () => {};
+    vi.mocked(api.getReportSummary).mockReturnValueOnce(
+      new Promise((resolve) => (release = resolve)),
+    );
+    await fireEvent.click(view.getByRole("button", { name: "Today" }));
+
+    // Still loading: everything on screen is still the month.
+    expect(view.getAllByText("Aug 1–31, 2026").length).toBeGreaterThan(0);
+    expect(view.getByRole("table", { name: /^Daily sales for Aug 1–31, 2026/ })).toBeTruthy();
+
+    release({ ...dailySummary, coin_sales_cents: 0, voucher_sales_cents: 0, cash_revenue_cents: 0, buckets: [] });
+    await waitFor(() =>
+      expect(view.getByRole("table", { name: /^Daily sales for Aug 6, 2026/ })).toBeTruthy(),
+    );
+  });
+
+  it("does not fall back to the browser date when the overview fails", async () => {
+    vi.mocked(api.getSalesReportOverview).mockRejectedValue(new Error("offline"));
+    const view = render(ReportsPage);
+
+    await waitFor(() => expect(view.getByText(/Couldn't load the sales report: offline/)).toBeTruthy());
+    expect(api.getReportSummary).not.toHaveBeenCalled();
+    expect(api.getPcSales).not.toHaveBeenCalled();
+    expect(view.getByText(/business date is unavailable/i)).toBeTruthy();
   });
 
   it("opens on This month, anchored to the server's business date", async () => {

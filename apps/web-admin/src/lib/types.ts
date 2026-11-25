@@ -421,6 +421,9 @@ export interface OwnerAuth {
 
 export type ReportPeriod = "day" | "week" | "month";
 
+/** Quick ranges on the Sales Report; "custom" is the page's From/To inputs. */
+export type SalesPreset = "today" | "week" | "month" | "last30";
+
 export interface ReportBucket {
   /** `YYYY-MM-DD` for day buckets, the week's Monday for week buckets, `YYYY-MM` for months. */
   period_label: string;

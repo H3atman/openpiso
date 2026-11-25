@@ -810,11 +810,16 @@ costs; ADR-0046). `period` is `day`, `week`, or `month`. Bucket
 week's Monday for `week` (so a Monday–Sunday week spanning New Year is one
 bucket), and `YYYY-MM` for `month`. Date fields are
 optional `YYYY-MM-DD` local-date strings; omitting both reads all history. The
-Sales Report page reads this endpoint with `period: "day"` over one calendar
-month to draw the Daily Sales Trend chart, with Coin Sales and Voucher Sales
-stacked and the total in the tooltip. Days with no revenue are absent
-from `buckets` and the page fills them as zero; days after the admin host's
-business date are left off the plot rather than drawn as zero.
+Sales Report page reads this endpoint over a selectable range (Today, This
+week, This month, Last 30 days, or a custom From/To) to fill the Summary tiles
+and the Sales Trend chart, with Coin Sales and Voucher Sales stacked and the
+total in the tooltip. The page picks the bucket from the range length: `day`
+buckets up to 92 days, `week` (Monday-start) up to 366 days, and `month`
+beyond. Buckets with no revenue are absent from `buckets`; the page zero-fills
+them client-side. Buckets that start after the admin host's business date are
+left off the plot rather than drawn as zero. Presets are anchored on the
+business date from `/web-admin/reports/overview`, never the browser clock.
+Dates must be real calendar dates (`2026-02-31` is a `400`).
 
 `POST /web-admin/reports/attendance` returns Attendance flow and exposure for
 the authenticated Owner Session. Its required `period` is `day`, `week`, or
