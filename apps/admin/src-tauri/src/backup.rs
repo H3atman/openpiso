@@ -1504,7 +1504,7 @@ pub fn table_backup_set(table: &str) -> Option<BackupSet> {
         | "attendance_calendar_dates"
         | "attendance_eligible_intervals" => BackupSet::Configuration,
         "audit_logs" | "audit_log" | "coin_transactions" | "manual_adjustments"
-        | "rejection_credits" | "wheel_spins"
+        | "rejection_credits" | "cash_collections" | "wheel_spins"
         // Attendance sources, claims and forfeitures are immutable ledger facts (ADR-0084).
         | "attendance_contributions"
         | "attendance_check_ins"

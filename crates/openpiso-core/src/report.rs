@@ -50,6 +50,34 @@ impl SalesKind {
     }
 }
 
+/// The two places cash piles up, and so the two kinds of Cash Collection
+/// (ADR-0091). Each kind collects exactly one [`SalesKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CashCollectionKind {
+    CoinBox,
+    VoucherCash,
+}
+
+impl CashCollectionKind {
+    pub const ALL: [Self; 2] = [Self::CoinBox, Self::VoucherCash];
+
+    /// The stored `cash_collections.kind` value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CoinBox => "coin_box",
+            Self::VoucherCash => "voucher_cash",
+        }
+    }
+
+    pub const fn sales_kind(self) -> SalesKind {
+        match self {
+            Self::CoinBox => SalesKind::Coin,
+            Self::VoucherCash => SalesKind::Voucher,
+        }
+    }
+}
+
 /// Audit viewer event-category filter (ADR-0015:
 /// Auth/Money/Time/Points/Admin/System). Each event type maps to exactly one
 /// category so the filter is mutually exclusive.
@@ -62,6 +90,7 @@ pub enum AuditCategory {
     Points,
     Admin,
     System,
+    Custody,
 }
 
 impl AuditCategory {
@@ -73,6 +102,7 @@ impl AuditCategory {
             Self::Points => "points",
             Self::Admin => "admin",
             Self::System => "system",
+            Self::Custody => "custody",
         }
     }
 
@@ -132,6 +162,7 @@ impl AuditCategory {
                 "account_import_completed",
             ],
             Self::System => &["legacy_event", "tamper_kill", "shop_opened", "shop_closed"],
+            Self::Custody => &["cash_collected"],
         }
     }
 }
@@ -147,6 +178,7 @@ pub fn category_for_event_type(event_type: &str) -> Option<AuditCategory> {
         AuditCategory::Points,
         AuditCategory::Admin,
         AuditCategory::System,
+        AuditCategory::Custody,
     ]
     .into_iter()
     .find(|category| category.event_types().contains(&event_type))
@@ -177,6 +209,7 @@ mod tests {
             AuditCategory::Points,
             AuditCategory::Admin,
             AuditCategory::System,
+            AuditCategory::Custody,
         ] {
             for event_type in category.event_types() {
                 assert!(

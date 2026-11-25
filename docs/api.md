@@ -723,6 +723,28 @@ is Monday through Sunday; Monthly is month-to-date. PC sales are cash revenue
 anchored to that PC, so sold vouchers without a PC remain in the Summary Total
 but are not assigned to a PC.
 
+`GET /web-admin/cash-on-hand` returns, per kind (`coin_box`,
+`voucher_cash`), the **Uncollected** amount and the last Cash Collection, and is
+independent of any report range (ADR-0091):
+
+```json
+{
+  "coin_box": {
+    "uncollected_cents": 12500,
+    "last_collection": { "amount_cents": 4000, "collected_at": "2026-11-20 08:30:00" }
+  },
+  "voucher_cash": { "uncollected_cents": 0, "last_collection": null }
+}
+```
+
+`POST /web-admin/cash-collections` with `{ "kind": "coin_box" | "voucher_cash" }`
+records a **Cash Collection** of everything of that kind not yet collected. The
+body carries only the kind; the server computes the amount in one
+`BEGIN IMMEDIATE` transaction, so concurrent calls record the cash once. It
+returns `{ "kind", "amount_cents", "collected_at" }`. A call at ₱0 Uncollected
+is refused with `409`. It appends a non-cash `cash_collected` Audit Log event
+(Audit Category `custody`) and never changes any report figure.
+
 `POST /web-admin/reports/summary` returns cash
 revenue split into Coin Sales and Voucher Sales, free time dispensed, points minted by wheel, points liability,
 and per-period buckets:
@@ -1889,6 +1911,8 @@ list, create, download, delete, schedule, or restore Backups.
 | `POST /web-admin/accounts/delete`                  | `admin_delete_accounts`        | atomic soft delete of `{ "account_ids": string[] }`; up to 1,000 explicit IDs, all must be active; forfeits balances, preserves history, ends sessions, revokes Account Sessions, and returns `{ "deleted_count": number }`                                                                 |
 | `POST /web-admin/accounts/adjust-time`             | `adjust_account_time`          | signed `delta` seconds; clamped ≥ 0, applied delta audited                                                                             |
 | `POST /web-admin/accounts/adjust-points`           | `adjust_account_points`        | signed `delta_centi` centipoints; clamped ≥ 0, applied delta audited                                                                   |
+| `GET /web-admin/cash-on-hand`                      | –                              | owner-authenticated Uncollected and last collection per kind (ADR-0091)                                                                 |
+| `POST /web-admin/cash-collections`                 | –                              | owner-only Collect; body `{ "kind" }` only, server-computed amount, `409` at ₱0                                                         |
 | `POST /web-admin/reports/summary`                  | `get_report_summary`           |                                                                                                                                        |
 | `POST /web-admin/reports/attendance`               | –                              | flow range plus independent Earning Month and Account pages; owner-authenticated; current liability is range-independent                 |
 | `POST /web-admin/reports/account`                  | `get_account_report`           |                                                                                                                                        |
