@@ -9889,7 +9889,10 @@ mod tests {
         let (_, newer) = update_fixture_versions();
         let mut state = test_state().await;
         state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-            std::sync::Mutex::new(Ok(vec![update_release(&newer, db::CURRENT_SCHEMA_VERSION + 1)])),
+            std::sync::Mutex::new(Ok(vec![update_release(
+                &newer,
+                db::CURRENT_SCHEMA_VERSION + 1,
+            )])),
         ));
         let installs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
@@ -10139,7 +10142,10 @@ mod tests {
             let dir = tempfile::tempdir().expect("data directory");
             let mut state = test_state_in(dir.path()).await;
             state.release_feed = Arc::new(crate::app_update::testing::FakeReleaseFeed(
-                std::sync::Mutex::new(Ok(vec![update_release(version, db::CURRENT_SCHEMA_VERSION)])),
+                std::sync::Mutex::new(Ok(vec![update_release(
+                    version,
+                    db::CURRENT_SCHEMA_VERSION,
+                )])),
             ));
             state.installer = Arc::new(crate::app_update::testing::FakeInstaller {
                 fail_prepare: true,
@@ -10460,7 +10466,10 @@ mod tests {
         assert_eq!(body["available"]["version"], newest);
         assert_eq!(body["available"]["raisesSchema"], true);
         assert_eq!(body["available"]["notes"], format!("Notes for {newest}"));
-        assert_eq!(body["available"]["schemaVersion"], db::CURRENT_SCHEMA_VERSION + 1);
+        assert_eq!(
+            body["available"]["schemaVersion"],
+            db::CURRENT_SCHEMA_VERSION + 1
+        );
         assert!(body["lastCheckedAt"].is_string());
         let versions: Vec<_> = body["rollbacks"]
             .as_array()
@@ -10803,7 +10812,8 @@ mod tests {
             .await
             .expect("JSON");
         assert_eq!(stored, failed);
-        *feed.0.lock().expect("feed") = Ok(vec![update_release(&newer, db::CURRENT_SCHEMA_VERSION)]);
+        *feed.0.lock().expect("feed") =
+            Ok(vec![update_release(&newer, db::CURRENT_SCHEMA_VERSION)]);
         let successful: serde_json::Value = client
             .post(&url)
             .owner(&auth)
