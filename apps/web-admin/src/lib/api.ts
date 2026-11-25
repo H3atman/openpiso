@@ -66,6 +66,7 @@ import type {
   RejectionDenominations,
   ReportPeriod,
   ReportSummary,
+  PcSalesReport,
   SalesReportOverview,
   ShopHoursSettings,
   ShopHoursSettingsInput,
@@ -677,6 +678,15 @@ export function getReportSummary(
       from_date: fromDate ?? null,
       to_date: toDate ?? null,
     }),
+  });
+}
+
+/// `POST /web-admin/reports/pc-sales` — Coin and Voucher Sales per PC, plus the
+/// unassigned row, for an inclusive range of business dates.
+export function getPcSales(fromDate: string, toDate: string): Promise<PcSalesReport> {
+  return request<PcSalesReport>("/web-admin/reports/pc-sales", {
+    method: "POST",
+    body: JSON.stringify({ from_date: fromDate, to_date: toDate }),
   });
 }
 

@@ -1226,6 +1226,37 @@ pub struct SalesReportPc {
     pub total_sales_cents: i64,
 }
 
+/// Coin Sales and Voucher Sales for one PC (or the unassigned row) over a range.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SalesSplit {
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PcSalesRow {
+    pub id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub sales: SalesSplit,
+}
+
+/// Ranged per-PC sales. `unassigned` is Cash Revenue with no PC (single-mint
+/// sold vouchers), so the PC rows plus it equal the range's Cash Revenue.
+#[derive(Debug, Clone, Serialize)]
+pub struct PcSalesReport {
+    pub from_date: String,
+    pub to_date: String,
+    pub pcs: Vec<PcSalesRow>,
+    pub unassigned: SalesSplit,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PcSalesInput {
+    pub from_date: String,
+    pub to_date: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SalesReportOverview {
     pub daily: SalesReportPeriod,

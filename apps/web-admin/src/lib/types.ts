@@ -478,6 +478,25 @@ export interface SalesReportPc {
   total_sales_cents: number;
 }
 
+/** Coin Sales and Voucher Sales for one PC, or for the unassigned row. */
+export interface SalesSplit {
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+}
+
+export interface PcSalesRow extends SalesSplit {
+  id: string;
+  name: string;
+}
+
+/** Ranged per-PC sales; the PC rows plus `unassigned` sum to the range's Cash Revenue. */
+export interface PcSalesReport {
+  from_date: string;
+  to_date: string;
+  pcs: PcSalesRow[];
+  unassigned: SalesSplit;
+}
+
 export interface SalesReportOverview {
   daily: SalesReportPeriod;
   weekly: SalesReportPeriod;
