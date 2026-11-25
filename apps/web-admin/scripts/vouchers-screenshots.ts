@@ -3,10 +3,6 @@
 // scripts/screenshot-runner.ts. Fetch is fixture-stubbed in
 // src/test/vouchers-harness-main.ts.
 // Usage: bun run scripts/vouchers-screenshots.ts --out <dir>
-//
-// Not covered: the void confirmations. The page asks through the browser's
-// native window.confirm, which is not part of the DOM and blocks the page
-// until answered, so neither a screenshot nor the runner's click can see it.
 import { runScreenshots, type ShotState } from "./screenshot-runner";
 
 type Tab = "vouchers" | "batches" | "template";
@@ -21,6 +17,7 @@ interface State extends ShotState {
 const tabs: Tab[] = ["vouchers", "batches", "template"];
 // The sandboxed preview frame has rendered; the default script has been applied.
 const previewReady = "document.querySelector('[data-voucher-render=preview]')?.dataset.renderStatus === 'ready'";
+const dialogOpen = { expr: "!!document.querySelector('[role=dialog]')", what: "no [role=dialog] opened" };
 const scriptApplied = `${previewReady} && document.querySelector("iframe[title='Voucher template live preview']").srcdoc.includes("dataset.tier")`;
 
 const states: State[] = [
@@ -73,6 +70,27 @@ const states: State[] = [
     device: "desktop",
     fullPage: false,
     tabTo: { scope: "main", name: "Create Voucher" },
+  },
+  // The in-app void confirmation, opened from the first active voucher's Void.
+  {
+    file: "vouchers-void-dialog-desktop-light.png",
+    tab: "vouchers",
+    scenario: "default",
+    theme: "light",
+    device: "desktop",
+    fullPage: false,
+    click: { scope: "main", name: "Void" },
+    until: dialogOpen,
+  },
+  {
+    file: "vouchers-void-dialog-phone-dark.png",
+    tab: "vouchers",
+    scenario: "default",
+    theme: "dark",
+    device: "phone",
+    fullPage: false,
+    click: { scope: "main", name: "Void" },
+    until: dialogOpen,
   },
   ...tabs.slice(0, 2).flatMap((tab): State[] => {
     const base = { tab, scenario: "empty", fullPage: true } as const;
