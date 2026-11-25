@@ -303,12 +303,33 @@
       class="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:gap-4 md:divide-y-0 md:border-0 md:bg-transparent"
       aria-label="Today at a glance"
     >
-      {@render stat(
-        "Today's Sales",
-        formatMoney(dashboard.today.sales_cents),
-        `${dashboard.today.transaction_count} ${dashboard.today.transaction_count === 1 ? "transaction" : "transactions"}`,
-      )}
-      {@render stat("Time Sold Today", formatDuration(dashboard.today.seconds_sold), "")}
+      <!-- Same Cash Revenue source as the Sales Report's Today figure. -->
+      <div
+        class="space-y-2 px-4 py-3 md:col-span-2 md:rounded-lg md:border md:bg-card md:p-4"
+        role="group"
+        aria-label="Today's sales"
+      >
+        <div class="flex items-baseline justify-between gap-4">
+          <p class="text-sm text-muted-foreground">Today's Sales</p>
+          <p class="text-xl font-bold tabular-nums md:text-2xl">
+            {formatMoney(dashboard.today.cash_revenue_cents)}
+          </p>
+        </div>
+        <dl class="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
+          <div>
+            <dt>Coin Sales</dt>
+            <dd class="text-sm font-semibold tabular-nums text-foreground">
+              {formatMoney(dashboard.today.coin_sales_cents)}
+            </dd>
+          </div>
+          <div>
+            <dt>Voucher Sales</dt>
+            <dd class="text-sm font-semibold tabular-nums text-foreground">
+              {formatMoney(dashboard.today.voucher_sales_cents)}
+            </dd>
+          </div>
+        </dl>
+      </div>
       {@render stat(
         "PCs In Use",
         `${statusCounts.in_use} / ${dashboard.pcs.length}`,

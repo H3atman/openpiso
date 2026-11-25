@@ -954,21 +954,14 @@ pub struct WheelSpinResponse {
     pub result: WheelSpinResult,
 }
 
+/// Today's Cash Revenue for the Admin's local business date, split into Coin
+/// Sales and Voucher Sales. Read from the same canonical view as the Sales
+/// Report, so the Dashboard and the report's Today figure always agree.
 #[derive(Debug, Clone, Serialize)]
 pub struct TodayReport {
-    pub sales_cents: i64,
-    pub transaction_count: i64,
-    pub seconds_sold: i64,
-}
-
-impl From<(i64, i64, i64)> for TodayReport {
-    fn from(value: (i64, i64, i64)) -> Self {
-        Self {
-            sales_cents: value.0,
-            transaction_count: value.1,
-            seconds_sold: value.2,
-        }
-    }
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+    pub cash_revenue_cents: i64,
 }
 
 /// PC Monitoring state on the dashboard (ADR-0076): the shop-wide toggle and
