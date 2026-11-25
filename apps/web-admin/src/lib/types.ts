@@ -349,10 +349,11 @@ export interface WheelSettingsInput {
   segments: WheelSegmentRow[];
 }
 
+/** Today's Cash Revenue for the Admin's business date (same source as the Sales Report). */
 export interface TodayReport {
-  sales_cents: number;
-  transaction_count: number;
-  seconds_sold: number;
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+  cash_revenue_cents: number;
 }
 
 export interface DashboardSnapshot {

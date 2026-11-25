@@ -839,6 +839,21 @@ one account or PC across the same date range:
 `get_points_liability` returns the integer total of outstanding unredeemed
 centipoints across active accounts.
 
+`GET /web-admin/dashboard` (`today`) and `GET /web-admin/today` return today's
+Cash Revenue for the Admin PC's local business date, read from the same
+`report_cash_revenue` view as the report summary, so the Dashboard always
+equals the Sales Report's Today figure (Coin Sales include Rejection Credits;
+Voucher Sales include sold vouchers and batch cards at redemption):
+
+```json
+{ "coin_sales_cents": 700, "voucher_sales_cents": 2500, "cash_revenue_cents": 3200 }
+```
+
+`cash_revenue_cents` is always the sum of the two parts. The former
+`sales_cents`, `transaction_count` and `seconds_sold` fields are gone: the
+audit source has no per-transaction count or seconds, so they are not
+meaningful there.
+
 ## Manual Guest Time adjustment
 
 `POST /web-admin/manual-adjustment` is the owner-only HTTP endpoint that

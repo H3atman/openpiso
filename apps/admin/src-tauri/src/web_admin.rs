@@ -6285,6 +6285,32 @@ mod tests {
         assert_eq!(bucket["voucher_sales_cents"], 2_500);
         assert_eq!(bucket["cash_revenue_cents"], 3_200);
 
+        // The Dashboard and /today read the same Cash Revenue source, so they
+        // agree with the report's Today figure (#36).
+        let dashboard = auth(client.get(format!("http://{address}/web-admin/dashboard")))
+            .send()
+            .await
+            .expect("dashboard should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("dashboard JSON");
+        assert_eq!(
+            dashboard["today"],
+            serde_json::json!({
+                "coin_sales_cents": 700,
+                "voucher_sales_cents": 2_500,
+                "cash_revenue_cents": 3_200,
+            })
+        );
+        let today_route = auth(client.get(format!("http://{address}/web-admin/today")))
+            .send()
+            .await
+            .expect("today should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("today JSON");
+        assert_eq!(today_route, dashboard["today"]);
+
         // Mon 2025-12-29 .. Sun 2026-01-04 is one week across New Year.
         for (id, event_type, amount_cents, created_at) in [
             ("ny-coin", "coin_accepted", 100, "2025-12-29T12:00:00Z"),
