@@ -89,6 +89,12 @@
   let templateHtml = $state("");
   let templateCss = $state("");
   let templateScript = $state("");
+  const editorTabs = [
+    { key: "html", label: "Card HTML" },
+    { key: "css", label: "Template CSS" },
+    { key: "script", label: "Template Script" },
+  ] as const;
+  let editorTab = $state<(typeof editorTabs)[number]["key"]>("html");
   // The Template Script as of the last Run click; a fresh object per click so
   // running the same text again re-renders. The preview never runs unrun text.
   let scriptRun = $state<{ script: string } | null>(null);
@@ -1447,35 +1453,25 @@
           <code>{"{{prefix}}"}</code>. Put <code>@page</code>, grid, and
           page-break rules in CSS.
         </p>
-        <div class="mt-5 grid gap-5 xl:grid-cols-2">
-          <div>
-            <label class="text-sm font-medium" for="voucher-template-html"
-              >Card HTML</label
-            >
-            <textarea
-              id="voucher-template-html"
-              class="mt-1 min-h-80 w-full rounded-md border bg-background p-3 font-mono text-xs"
-              spellcheck="false"
-              bind:value={templateHtml}
-            ></textarea>
-          </div>
-          <div>
-            <label class="text-sm font-medium" for="voucher-template-css"
-              >Template CSS</label
-            >
-            <textarea
-              id="voucher-template-css"
-              class="mt-1 min-h-80 w-full rounded-md border bg-background p-3 font-mono text-xs"
-              spellcheck="false"
-              bind:value={templateCss}
-            ></textarea>
-          </div>
-        </div>
-        <div class="mt-5">
+      </div>
+      <div class="grid items-start gap-6 xl:grid-cols-2">
+        <div data-template-editors class="min-w-0 rounded-lg border bg-card p-6">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <label class="text-sm font-medium" for="voucher-template-script"
-              >Template Script</label
-            >
+            <div role="tablist" class="flex gap-1">
+              {#each editorTabs as item}
+                <button
+                  type="button"
+                  role="tab"
+                  id="voucher-template-tab-{item.key}"
+                  aria-selected={editorTab === item.key}
+                  aria-controls="voucher-template-{item.key}"
+                  class="rounded-md px-3 py-1.5 text-sm {editorTab === item.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'hover:bg-accent'}"
+                  onclick={() => (editorTab = item.key)}>{item.label}</button
+                >
+              {/each}
+            </div>
             <button
               type="button"
               class="rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
@@ -1483,48 +1479,76 @@
               >Run</button
             >
           </div>
-          <p
-            role="note"
-            class="mt-1 rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-xs"
-          >
-            A Template Script can send voucher codes off this PC. Only paste
-            code you trust.
-          </p>
+          <!-- All three editors stay mounted so unsaved edits survive tab switches. -->
           <textarea
-            id="voucher-template-script"
-            class="mt-2 min-h-40 w-full rounded-md border bg-background p-3 font-mono text-xs"
+            id="voucher-template-html"
+            role="tabpanel"
+            aria-labelledby="voucher-template-tab-html"
+            hidden={editorTab !== "html"}
+            class="mt-3 min-h-80 w-full rounded-md border bg-background p-3 font-mono text-xs"
             spellcheck="false"
-            placeholder="Optional JavaScript. Read card data from the cards, for example data-price=&quot;&#123;&#123;price&#125;&#125;&quot;."
-            bind:value={templateScript}
+            bind:value={templateHtml}
           ></textarea>
-          <p class="mt-1 text-xs text-muted-foreground">
-            Run applies it to the preview; print always runs the saved script.
-          </p>
-        </div>
-      </div>
-      <div class="rounded-lg border bg-card p-6">
-        <h3 class="mb-4 text-lg font-semibold">Live Preview</h3>
-        <div
-          data-voucher-render="preview"
-          data-render-status={previewStatus}
-          data-render-seq={previewSeq}
-        >
-          <iframe
-            bind:this={previewFrame}
-            title="Voucher template live preview"
-            sandbox="allow-scripts allow-modals"
-            style:height={previewHeight === null ? undefined : `${previewHeight}px`}
-            class="w-full rounded-md border bg-white"
-          ></iframe>
-          {#if previewMessage}
+          <textarea
+            id="voucher-template-css"
+            role="tabpanel"
+            aria-labelledby="voucher-template-tab-css"
+            hidden={editorTab !== "css"}
+            class="mt-3 min-h-80 w-full rounded-md border bg-background p-3 font-mono text-xs"
+            spellcheck="false"
+            bind:value={templateCss}
+          ></textarea>
+          <div hidden={editorTab !== "script"}>
             <p
-              role="alert"
-              data-render-error
-              class="mt-3 text-sm text-destructive"
+              role="note"
+              class="mt-3 rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-xs"
             >
-              {previewMessage}
+              A Template Script can send voucher codes off this PC. Only paste
+              code you trust.
             </p>
-          {/if}
+            <textarea
+              id="voucher-template-script"
+              role="tabpanel"
+              aria-labelledby="voucher-template-tab-script"
+              class="mt-2 min-h-80 w-full rounded-md border bg-background p-3 font-mono text-xs"
+              spellcheck="false"
+              placeholder="Optional JavaScript. Read card data from the cards, for example data-price=&quot;&#123;&#123;price&#125;&#125;&quot;."
+              bind:value={templateScript}
+            ></textarea>
+            <p class="mt-1 text-xs text-muted-foreground">
+              Run applies it to the preview; print always runs the saved
+              script.
+            </p>
+          </div>
+        </div>
+        <div
+          data-template-preview
+          class="min-w-0 rounded-lg border bg-card p-6 xl:sticky xl:top-4"
+        >
+          <h3 class="mb-4 text-lg font-semibold">Live Preview</h3>
+          <div
+            data-voucher-render="preview"
+            data-render-status={previewStatus}
+            data-render-seq={previewSeq}
+            class="rounded-md bg-neutral-200 p-3 dark:bg-neutral-700"
+          >
+            <iframe
+              bind:this={previewFrame}
+              title="Voucher template live preview"
+              sandbox="allow-scripts allow-modals"
+              style:height={previewHeight === null ? undefined : `${previewHeight}px`}
+              class="w-full"
+            ></iframe>
+            {#if previewMessage}
+              <p
+                role="alert"
+                data-render-error
+                class="mt-3 text-sm text-destructive"
+              >
+                {previewMessage}
+              </p>
+            {/if}
+          </div>
         </div>
       </div>
     </div>
