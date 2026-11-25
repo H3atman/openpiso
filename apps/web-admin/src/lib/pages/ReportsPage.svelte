@@ -12,14 +12,11 @@
   import { Input } from "$lib/components/ui/input";
   import { Skeleton } from "$lib/components/ui/skeleton";
   import {
-    MONTH_NAMES,
     formatAttendanceDeadline,
     formatMoney,
     formatProseDuration,
     formatSalesDateRange,
     isoDate,
-    lastDayOfMonth,
-    monthDateRange,
     statusLabel,
   } from "../format";
   import type {
@@ -27,10 +24,17 @@
     AttendanceReportInput,
     AttendanceEarningMonthRow,
     AttendanceReportPeriod,
-    DailySalesPoint,
-    ReportBucket,
+    ReportSummary,
     SalesReportOverview,
   } from "../types";
+  import {
+    bucketFor,
+    fillSeries,
+    presetRange,
+    rangeError as salesRangeError,
+    type SalesBucket,
+    type SalesPreset,
+  } from "../salesRange";
 
   let salesReport = $state<SalesReportOverview | null>(null);
   let busy = $state(false);
@@ -43,71 +47,77 @@
   let attendanceToDate = $state("");
   let attendanceRequest = 0;
 
-  const today = new Date();
-  const YEAR_OPTIONS = Array.from(
-    { length: 5 },
-    (_, index) => today.getFullYear() - 4 + index,
-  );
+  const PRESETS: { id: SalesPreset; label: string }[] = [
+    { id: "today", label: "Today" },
+    { id: "week", label: "This week" },
+    { id: "month", label: "This month" },
+    { id: "last30", label: "Last 30 days" },
+  ];
 
-  let chartYear = $state(today.getFullYear());
-  let chartMonth = $state(today.getMonth() + 1);
-  let chartPoints = $state<DailySalesPoint[]>([]);
-  let chartBusy = $state(false);
-  let chartError = $state("");
-  let chartRequest = 0;
-
-  /** Expands the sparse server buckets into one point per calendar day. */
-  function dailySeries(
-    year: number,
-    month: number,
-    buckets: readonly ReportBucket[],
-  ): DailySalesPoint[] {
-    const byDate = new Map(buckets.map((bucket) => [bucket.period_label, bucket]));
-    return Array.from({ length: lastDayOfMonth(year, month) }, (_, index) => {
-      const date = isoDate(year, month, index + 1);
-      const bucket = byDate.get(date);
-      return {
-        date,
-        coin_cents: bucket?.coin_sales_cents ?? 0,
-        voucher_cents: bucket?.voucher_sales_cents ?? 0,
-      };
-    });
-  }
-
-  async function loadDailySales(year: number, month: number): Promise<void> {
-    const request = ++chartRequest;
-    chartBusy = true;
-    chartError = "";
-    const [fromDate, toDate] = monthDateRange(year, month);
-    try {
-      const summary = await api.getReportSummary("day", fromDate, toDate);
-      if (request !== chartRequest) return;
-      chartPoints = dailySeries(year, month, summary.buckets);
-    } catch (caught) {
-      if (request !== chartRequest) return;
-      chartPoints = [];
-      chartError = caught instanceof Error ? caught.message : String(caught);
-    } finally {
-      if (request === chartRequest) chartBusy = false;
-    }
-  }
-
-  let chartCaption = $derived(formatSalesDateRange(...monthDateRange(chartYear, chartMonth)));
+  /** The selected range: a preset id, or "custom" with the From/To inputs below. */
+  let selected = $state<SalesPreset | "custom">("month");
+  let customFrom = $state("");
+  let customTo = $state("");
+  let customError = $state("");
+  let rangeSummary = $state<ReportSummary | null>(null);
+  let rangeBucket = $state<SalesBucket>("day");
+  let rangeFrom = $state("");
+  let rangeTo = $state("");
+  let rangeBusy = $state(false);
+  let rangeLoadError = $state("");
+  let rangeRequest = 0;
 
   /**
    * The admin host owns the business date, so prefer the one the overview
-   * reports and fall back to the browser clock only until it loads. Days after
-   * it are unwritten, not zero-revenue, so they are left off the plot.
+   * reports and fall back to the browser clock only if it fails to load. Days
+   * after it are unwritten, not zero-revenue, so they are left off the plot.
    */
-  let businessToday = $derived(
-    salesReport?.daily.to_date ??
-      isoDate(today.getFullYear(), today.getMonth() + 1, today.getDate()),
-  );
-  let chartSeries = $derived(chartPoints.filter((point) => point.date <= businessToday));
+  let businessToday = $state(browserToday());
 
-  $effect(() => {
-    void loadDailySales(chartYear, chartMonth);
-  });
+  function browserToday(): string {
+    const now = new Date();
+    return isoDate(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  }
+
+  async function loadRange(from: string, to: string): Promise<void> {
+    const request = ++rangeRequest;
+    const bucket = bucketFor(from, to);
+    rangeBusy = true;
+    rangeLoadError = "";
+    rangeFrom = from;
+    rangeTo = to;
+    rangeBucket = bucket;
+    try {
+      const summary = await api.getReportSummary(bucket, from, to);
+      if (request !== rangeRequest) return;
+      rangeSummary = summary;
+    } catch (caught) {
+      if (request !== rangeRequest) return;
+      rangeSummary = null;
+      rangeLoadError = caught instanceof Error ? caught.message : String(caught);
+    } finally {
+      if (request === rangeRequest) rangeBusy = false;
+    }
+  }
+
+  function selectPreset(preset: SalesPreset): void {
+    selected = preset;
+    customError = "";
+    void loadRange(...presetRange(preset, businessToday));
+  }
+
+  function applyCustom(): void {
+    const problem = salesRangeError(customFrom, customTo);
+    customError = problem ?? "";
+    if (!problem) void loadRange(customFrom, customTo);
+  }
+
+  let chartCaption = $derived(rangeFrom ? formatSalesDateRange(rangeFrom, rangeTo) : "");
+  let chartSeries = $derived(
+    rangeSummary
+      ? fillSeries(rangeBucket, rangeFrom, rangeTo, rangeSummary.buckets, businessToday)
+      : [],
+  );
 
   function salesPeriodRange(period: SalesReportOverview["daily"] | undefined): string {
     return period ? formatSalesDateRange(period.from_date, period.to_date) : "";
@@ -222,11 +232,13 @@
     salesReport = null;
     try {
       salesReport = await api.getSalesReportOverview();
+      businessToday = salesReport.daily.to_date ?? businessToday;
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     } finally {
       busy = false;
     }
+    selectPreset("month");
   }
 
   onMount(() => {
@@ -315,39 +327,69 @@
   </section>
 
   <section class="rounded-lg border bg-card" aria-labelledby="daily-trend-heading">
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+    <div class="space-y-3 border-b px-4 py-3">
       <div class="min-w-0">
-        <h3 id="daily-trend-heading" class="font-semibold">Daily Sales Trend</h3>
+        <h3 id="daily-trend-heading" class="font-semibold">Sales Trend</h3>
         <p class="text-xs text-muted-foreground">{chartCaption}</p>
       </div>
-      <div class="grid w-full grid-cols-2 gap-2 md:flex md:w-auto">
-        <label for="sales-chart-month" class="sr-only">Month</label>
-        <NativeSelect id="sales-chart-month" class="md:w-36" bind:value={chartMonth}>
-          {#each MONTH_NAMES as name, index}
-            <option value={index + 1}>{name}</option>
-          {/each}
-        </NativeSelect>
-        <label for="sales-chart-year" class="sr-only">Year</label>
-        <NativeSelect id="sales-chart-year" class="md:w-24" bind:value={chartYear}>
-          {#each YEAR_OPTIONS as year}
-            <option value={year}>{year}</option>
-          {/each}
-        </NativeSelect>
+      <div class="flex flex-wrap items-end gap-2" role="group" aria-label="Sales range">
+        {#each PRESETS as preset (preset.id)}
+          <Button
+            size="sm"
+            variant={selected === preset.id ? "default" : "outline"}
+            aria-pressed={selected === preset.id}
+            onclick={() => selectPreset(preset.id)}
+          >
+            {preset.label}
+          </Button>
+        {/each}
+        <Button
+          size="sm"
+          variant={selected === "custom" ? "default" : "outline"}
+          aria-pressed={selected === "custom"}
+          onclick={() => (selected = "custom")}
+        >
+          Custom
+        </Button>
       </div>
+      {#if selected === "custom"}
+        <div class="grid grid-cols-2 gap-3 md:flex md:items-end">
+          <div class="min-w-0 md:w-40">
+            <label for="sales-from-date" class="mb-1.5 block text-xs font-medium text-muted-foreground">Sales from</label>
+            <Input id="sales-from-date" type="date" class="dark:scheme-dark" max={customTo || undefined} bind:value={customFrom} />
+          </div>
+          <div class="min-w-0 md:w-40">
+            <label for="sales-to-date" class="mb-1.5 block text-xs font-medium text-muted-foreground">Sales to</label>
+            <Input id="sales-to-date" type="date" class="dark:scheme-dark" min={customFrom || undefined} bind:value={customTo} />
+          </div>
+          <Button class="col-span-2 md:col-span-1" disabled={rangeBusy} onclick={applyCustom}>Apply range</Button>
+        </div>
+        {#if customError}
+          <p class="text-sm text-destructive" role="alert">{customError}</p>
+        {/if}
+      {/if}
     </div>
 
-    <div class="p-4">
-      {#if chartError}
+    <div class="space-y-4 p-4">
+      {#if rangeLoadError}
         <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive" role="alert">
-          Couldn't load daily sales: {chartError}
+          Couldn't load sales: {rangeLoadError}
         </div>
-      {:else if chartBusy && chartPoints.length === 0}
+      {:else if rangeSummary}
+        <section
+          class="grid grid-cols-3 gap-3"
+          aria-label="Selected range summary"
+        >
+          {@render tile("Coin Sales", formatMoney(rangeSummary.coin_sales_cents))}
+          {@render tile("Voucher Sales", formatMoney(rangeSummary.voucher_sales_cents))}
+          {@render tile("Cash Revenue", formatMoney(rangeSummary.cash_revenue_cents))}
+        </section>
+        <DailySalesChart points={chartSeries} caption={chartCaption} bucket={rangeBucket} />
+      {:else}
         <div role="status">
-          <span class="sr-only">Loading daily sales…</span>
+          <span class="sr-only">Loading sales…</span>
           <Skeleton class="h-[12.5rem] md:h-[15rem]" />
         </div>
-      {:else}
-        <DailySalesChart points={chartSeries} caption={chartCaption} />
       {/if}
     </div>
   </section>
