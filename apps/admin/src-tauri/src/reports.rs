@@ -99,6 +99,19 @@ fn sales_kind_amount(kind: SalesKind) -> String {
     format!("CASE WHEN event_type IN ({types}) THEN amount_cents ELSE 0 END")
 }
 
+/// All-time Cash Revenue of one kind. Cash Collection's Uncollected is this
+/// minus that kind's collections (ADR-0091).
+pub(crate) async fn sales_total_cents(
+    conn: &mut sqlx::SqliteConnection,
+    kind: SalesKind,
+) -> AppResult<i64> {
+    let sql = format!(
+        "SELECT COALESCE(SUM({}), 0) FROM report_cash_revenue",
+        sales_kind_amount(kind)
+    );
+    Ok(sqlx::query_scalar(&sql).fetch_one(conn).await?)
+}
+
 /// Returns the unified report summary across the selected period and date
 /// range. Cash Revenue (split into Coin Sales and Voucher Sales) and Free Time
 /// Dispensed are read from the canonical audit_log views so the totals
@@ -759,6 +772,7 @@ fn push_audit_filters(query: &mut QueryBuilder<'_, Sqlite>, filter: &AuditFilter
                 "points" => Some(AuditCategory::Points),
                 "admin" => Some(AuditCategory::Admin),
                 "system" => Some(AuditCategory::System),
+                "custody" => Some(AuditCategory::Custody),
                 _ => None,
             };
             if let Some(parsed) = parsed {

@@ -564,6 +564,8 @@ pub(crate) fn router(state: OwnerServerState) -> Router {
             post(adjust_account_points),
         )
         // Reports.
+        .route("/web-admin/cash-on-hand", get(cash_on_hand))
+        .route("/web-admin/cash-collections", post(collect_cash))
         .route("/web-admin/reports/summary", post(report_summary))
         .route("/web-admin/reports/overview", get(sales_report_overview))
         .route("/web-admin/reports/pc-sales", post(pc_sales_report))
@@ -2127,6 +2129,27 @@ async fn report_summary(
     )
     .await
     .map(Json)
+}
+
+async fn cash_on_hand(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+) -> HttpResult<db::cash_collections::CashOnHand> {
+    db::cash_on_hand(&state.pool).await.map(Json)
+}
+
+/// The body carries only the kind; the amount is always server-computed.
+#[derive(Debug, Deserialize)]
+struct CollectCashInput {
+    kind: openpiso_core::report::CashCollectionKind,
+}
+
+async fn collect_cash(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+    Json(input): Json<CollectCashInput>,
+) -> HttpResult<db::cash_collections::CashCollection> {
+    db::collect_cash(&state.pool, input.kind).await.map(Json)
 }
 
 async fn sales_report_overview(
@@ -6546,6 +6569,200 @@ mod tests {
         assert_eq!(reversed.status(), StatusCode::BAD_REQUEST);
         let malformed = summary("2024-3-1", "2024-03-10").await;
         assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Inserts one Cash Revenue audit row (the report view's source of truth).
+    async fn seed_cash_row(pool: &SqlitePool, id: &str, event_type: &str, amount_cents: i64) {
+        sqlx::query(
+            "INSERT INTO audit_log
+             (id, event_type, outcome, actor, amount_cents, cash_flag, summary)
+             VALUES (?, ?, 'success', 'system', ?, 1, 'fixture')",
+        )
+        .bind(id)
+        .bind(event_type)
+        .bind(amount_cents)
+        .execute(pool)
+        .await
+        .expect("cash row fixture should insert");
+    }
+
+    /// Cash Collection (ADR-0091): Uncollected is all-time sales of the kind
+    /// minus that kind's collections; Collect records the server-computed
+    /// amount only and never moves a revenue figure.
+    #[tokio::test]
+    async fn cash_collection_records_uncollected_and_leaves_revenue_unchanged() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "collect-pin").await;
+        let url = |path: &str| format!("http://{address}{path}");
+        let cash_on_hand = || async {
+            client
+                .get(url("/web-admin/cash-on-hand"))
+                .owner(&token)
+                .send()
+                .await
+                .expect("cash on hand should complete")
+                .json::<serde_json::Value>()
+                .await
+                .expect("cash on hand JSON")
+        };
+        let collect = |body: serde_json::Value| {
+            let request = client
+                .post(url("/web-admin/cash-collections"))
+                .owner(&token)
+                .json(&body);
+            async move { request.send().await.expect("collect should complete") }
+        };
+        let summary = || async {
+            client
+                .post(url("/web-admin/reports/summary"))
+                .owner(&token)
+                .json(&serde_json::json!({ "period": "day" }))
+                .send()
+                .await
+                .expect("summary should complete")
+                .json::<serde_json::Value>()
+                .await
+                .expect("summary JSON")
+        };
+
+        seed_cash_row(&pool, "cc-coin", "coin_accepted", 300).await;
+        seed_cash_row(&pool, "cc-credit", "rejection_credit", 100).await;
+        seed_cash_row(&pool, "cc-sold", "voucher_sold", 2_000).await;
+        seed_cash_row(&pool, "cc-redeemed", "sold_voucher_redeemed", 500).await;
+
+        // Before any collection: all-time sales are uncollected, nothing "last".
+        let before = cash_on_hand().await;
+        assert_eq!(
+            before,
+            serde_json::json!({
+                "coin_box": { "uncollected_cents": 400, "last_collection": null },
+                "voucher_cash": { "uncollected_cents": 2_500, "last_collection": null },
+            })
+        );
+        let revenue_before = summary().await;
+
+        // The amount is whatever the server computes; a client amount is ignored.
+        let response = collect(serde_json::json!({ "kind": "coin_box", "amount_cents": 1 })).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let recorded = response
+            .json::<serde_json::Value>()
+            .await
+            .expect("collect JSON");
+        assert_eq!(recorded["kind"], "coin_box");
+        assert_eq!(recorded["amount_cents"], 400);
+        assert!(recorded["collected_at"]
+            .as_str()
+            .is_some_and(|at| !at.is_empty()));
+
+        let after = cash_on_hand().await;
+        assert_eq!(after["coin_box"]["uncollected_cents"], 0);
+        assert_eq!(after["coin_box"]["last_collection"]["amount_cents"], 400);
+        assert_eq!(
+            after["coin_box"]["last_collection"]["collected_at"],
+            recorded["collected_at"]
+        );
+        // The other kind is untouched.
+        assert_eq!(after["voucher_cash"], before["voucher_cash"]);
+
+        // A second Collect at ₱0 is refused and records nothing.
+        let refused = collect(serde_json::json!({ "kind": "coin_box" })).await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cash_collections")
+            .fetch_one(&pool)
+            .await
+            .expect("collections should count");
+        assert_eq!(rows, 1);
+
+        // New sales accumulate again; the next Collect covers only them.
+        seed_cash_row(&pool, "cc-coin-2", "coin_accepted", 700).await;
+        assert_eq!(cash_on_hand().await["coin_box"]["uncollected_cents"], 700);
+        let second = collect(serde_json::json!({ "kind": "coin_box" })).await;
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(
+            second.json::<serde_json::Value>().await.expect("JSON")["amount_cents"],
+            700
+        );
+
+        let voucher = collect(serde_json::json!({ "kind": "voucher_cash" })).await;
+        assert_eq!(voucher.status(), StatusCode::OK);
+        assert_eq!(
+            voucher.json::<serde_json::Value>().await.expect("JSON")["amount_cents"],
+            2_500
+        );
+
+        // Collecting is custody only: every revenue figure is unchanged except
+        // the sales the test added itself (700 coin).
+        let revenue_after = summary().await;
+        assert_eq!(revenue_after["coin_sales_cents"], 1_100);
+        assert_eq!(
+            revenue_after["voucher_sales_cents"],
+            revenue_before["voucher_sales_cents"]
+        );
+        assert_eq!(revenue_after["cash_revenue_cents"], 3_600);
+
+        // The Audit Log records each collection under its own category, non-cash.
+        let audit = client
+            .post(url("/web-admin/audit/search"))
+            .owner(&token)
+            .json(&serde_json::json!({ "category": "custody" }))
+            .send()
+            .await
+            .expect("audit search should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("audit JSON");
+        assert_eq!(audit["total"], 3);
+        for row in audit["rows"].as_array().expect("audit rows") {
+            assert_eq!(row["event_type"], "cash_collected");
+            assert_eq!(row["cash_flag"], false);
+        }
+
+        let invalid = collect(serde_json::json!({ "kind": "piggy_bank" })).await;
+        assert!(invalid.status().is_client_error());
+    }
+
+    /// Several simultaneous Collect calls (two browser tabs) record the cash
+    /// once: one wins, the rest are refused at ₱0.
+    #[tokio::test]
+    async fn concurrent_cash_collections_record_the_cash_once() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "race-pin").await;
+        seed_cash_row(&pool, "race-coin", "coin_accepted", 100).await;
+        seed_cash_row(&pool, "race-coin-2", "coin_accepted", 500).await;
+
+        let calls = (0..8).map(|_| {
+            client
+                .post(format!("http://{address}/web-admin/cash-collections"))
+                .owner(&token)
+                .json(&serde_json::json!({ "kind": "coin_box" }))
+                .send()
+        });
+        let statuses: Vec<StatusCode> = futures_util::future::join_all(calls)
+            .await
+            .into_iter()
+            .map(|response| response.expect("collect should complete").status())
+            .collect();
+
+        assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 1);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::CONFLICT)
+                .count(),
+            7
+        );
+        let (rows, total): (i64, i64) =
+            sqlx::query_as("SELECT COUNT(*), SUM(amount_cents) FROM cash_collections")
+                .fetch_one(&pool)
+                .await
+                .expect("collections should aggregate");
+        assert_eq!((rows, total), (1, 600));
     }
 
     #[tokio::test]

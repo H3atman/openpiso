@@ -403,6 +403,22 @@ the same SQLite transaction. The audit event's `summary` includes the optional
 reason so the audit viewer's free-text search can find it. A negative delta is
 a compensating event, not an audit-history edit (ADR-0015).
 
+## Cash Collections (migration 0060)
+
+`cash_collections` records custody of cash, never revenue (ADR-0091):
+`id`, `kind` (`coin_box` | `voucher_cash`), `amount_cents` (positive integer)
+and server `collected_at` (`CURRENT_TIMESTAMP`, second precision). It is
+append-only: triggers `cash_collections_no_update` and
+`cash_collections_no_delete` abort `UPDATE` and `DELETE`. Index
+`idx_cash_collections_kind` on `(kind, collected_at)`. It belongs to the
+**Ledger** Backup Set.
+
+Uncollected(kind) is `report_cash_revenue` sales of that kind (Coin: `coin_accepted`,
+`rejection_credit`; Voucher: `voucher_sold`, `sold_voucher_redeemed`) minus
+`SUM(amount_cents)` of that kind's rows. There is no timestamp boundary. Each
+collection also appends one non-cash `cash_collected` audit event (category
+`custody`).
+
 ## Voucher batches (migrations 0016, 0019, 0020, 0021)
 
 `voucher_batches` stores one row per batch generation action. Columns: id,
