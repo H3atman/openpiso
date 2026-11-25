@@ -540,7 +540,7 @@ pub async fn set_shop_name(pool: &SqlitePool, name: &str) -> AppResult<String> {
     Ok(trimmed.to_owned())
 }
 
-pub const DEFAULT_VOUCHER_TEMPLATE_HTML: &str = r#"<article class="voucher-card">
+pub const DEFAULT_VOUCHER_TEMPLATE_HTML: &str = r#"<article class="voucher-card" data-price="{{price}}">
   <header><strong>{{shop_name}}</strong><span>{{prefix}}</span></header>
   <div class="voucher-code">{{code}}</div>
   <dl>
@@ -560,12 +560,18 @@ body { margin: 0; color: #111827; font-family: Arial, sans-serif; }
 .voucher-code { margin: 8mm 0; font: 700 18pt monospace; text-align: center; letter-spacing: 0.08em; }
 .voucher-card dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3mm 6mm; margin: 0; }
 .voucher-card dl div { display: flex; justify-content: space-between; gap: 2mm; }
+.voucher-card[data-tier="low"] .voucher-code { border-top: 4px solid #15803d; }
+.voucher-card[data-tier="high"] .voucher-code { border-top: 4px solid #6b1212; }
 .voucher-card dt { color: #64748b; }
 .voucher-card dd { margin: 0; font-weight: 700; }
 @media print { .voucher-card { break-inside: avoid; page-break-inside: avoid; } }"#;
 
-/// Template Scripts are optional; the default is empty.
-pub const DEFAULT_VOUCHER_TEMPLATE_SCRIPT: &str = "";
+/// Tiers each card by its `data-price` (ADR-0091); the default CSS colours the tiers.
+pub const DEFAULT_VOUCHER_TEMPLATE_SCRIPT: &str = r#"// Tier each card by price: under 50 is low, 50 and over is high, free or unparseable gets none.
+for (const card of document.querySelectorAll("[data-price]")) {
+  const price = parseFloat(card.dataset.price.replace(/[^\d.]/g, ""));
+  if (price > 0) card.dataset.tier = price < 50 ? "low" : "high";
+}"#;
 
 const MAX_VOUCHER_TEMPLATE_PART_BYTES: usize = 100_000;
 
@@ -1100,9 +1106,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn voucher_template_accepts_empty_script_and_defaults_to_empty() -> AppResult<()> {
+    async fn voucher_template_accepts_empty_script_and_defaults_to_the_price_tier_script(
+    ) -> AppResult<()> {
         let pool = test_pool().await?;
-        assert_eq!(voucher_template(&pool).await?.script, "");
+        assert_eq!(
+            voucher_template(&pool).await?.script,
+            DEFAULT_VOUCHER_TEMPLATE_SCRIPT
+        );
         update_voucher_template(
             &pool,
             &VoucherTemplateInput {
@@ -1138,7 +1148,10 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(AppError::InvalidInput(_))));
-        assert_eq!(voucher_template(&pool).await?.script, "");
+        assert_eq!(
+            voucher_template(&pool).await?.script,
+            DEFAULT_VOUCHER_TEMPLATE_SCRIPT
+        );
         Ok(())
     }
 

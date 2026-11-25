@@ -40,6 +40,9 @@
     prefix: "DEMO",
   };
 
+  // One preview card per price tier boundary (the default script tiers at ₱50).
+  const SAMPLE_PRICES = ["₱5.00", "₱20.00", "₱50.00", "₱100.00"];
+
   const BATCH_PAGE_SIZE = 100;
   const VOUCHER_PAGE_SIZE = 100;
 
@@ -111,12 +114,11 @@
             css: templateCss,
             script: scriptRun?.script,
           },
-          [
-            {
-              ...SAMPLE_VALUES,
-              shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
-            },
-          ],
+          SAMPLE_PRICES.map((price) => ({
+            ...SAMPLE_VALUES,
+            price,
+            shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
+          })),
         ),
       };
     } catch (caught) {

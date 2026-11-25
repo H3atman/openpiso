@@ -8616,8 +8616,14 @@ mod tests {
         assert_eq!(updated["html"], "<article>{{code}}</article>");
         assert_eq!(updated["css"], "@page { margin: 5mm; }");
         assert_eq!(updated["script"], "document.title = 'x';");
-        assert_eq!(updated["default_script"], "");
-        assert_eq!(initial["script"], "");
+        assert_eq!(
+            updated["default_script"],
+            crate::db::settings::DEFAULT_VOUCHER_TEMPLATE_SCRIPT
+        );
+        assert_eq!(
+            initial["script"],
+            crate::db::settings::DEFAULT_VOUCHER_TEMPLATE_SCRIPT
+        );
 
         let denied_update = client
             .put(&url)

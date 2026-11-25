@@ -544,6 +544,8 @@ interface Outcome {
   codesPresent?: boolean;
   /** `document.body.dataset.ran` as left by a Template Script. */
   ran?: string;
+  /** Comma-joined `data-tier` of each `.voucher-card` ("" = no tier). */
+  tiers?: string;
 }
 
 const PREVIEW = `[data-voucher-render="preview"]`;
@@ -637,12 +639,17 @@ async function runScriptPreview(
     `(() => { const el = document.querySelector('${PREVIEW}'); return { status: el.dataset.renderStatus, message: el.querySelector('[data-render-error]')?.textContent?.trim() ?? '' }; })()`,
   );
   const outcome: Outcome = { ...state };
-  if (state.status === "ready")
+  if (state.status === "ready") {
     outcome.ran = await inFrame<string>(`document.body.dataset.ran ?? ''`);
+    outcome.tiers = await inFrame<string>(TIERS_EXPR);
+  }
   return outcome;
 }
 
 let batchCodes: string[] = [];
+let freeBatchCodes: string[] = [];
+
+const TIERS_EXPR = `Array.from(document.querySelectorAll('.voucher-card')).map((c) => c.dataset.tier ?? '').join(',')`;
 
 /** Save through the API (real PUT), print the batch through the UI, read the outcome. */
 async function printCase(c: Case): Promise<Outcome> {
@@ -669,8 +676,9 @@ async function printCase(c: Case): Promise<Outcome> {
         `${JSON.stringify(batchCodes)}.every((code) => document.body.textContent.includes(code))`,
       );
       const ran = await inFrame<string>(`document.body.dataset.ran ?? ''`);
+      const tiers = await inFrame<string>(TIERS_EXPR);
       // The hooked print() logged; afterprint then removes the frame.
-      return { status: "ready", message: "", height, codesPresent, ran };
+      return { status: "ready", message: "", height, codesPresent, ran, tiers };
     }
     if (state.toast && /print|render|timed out|voucher/i.test(state.toast))
       return {
@@ -778,6 +786,21 @@ try {
   };
   batchCodes = detail.vouchers.map((v) => v.code);
   check("fixture: batch of 3 cards created", batchCodes.length === 3);
+  const freeBatch = (await ownerFetch("POST", "/web-admin/voucher-batches", {
+    prefix: "FREE",
+    suffix_length: 6,
+    count: 3,
+    seconds_value: 600,
+    points_value_centi: 0,
+    cash_amount_cents: 0,
+    expires_at: null,
+  })) as { id: string };
+  freeBatchCodes = (
+    (await ownerFetch(
+      "GET",
+      `/web-admin/voucher-batches/${freeBatch.id}`,
+    )) as { vouchers: { code: string }[] }
+  ).vouchers.map((v) => v.code);
 
   browser = Bun.spawn(
     [
@@ -903,6 +926,21 @@ try {
     `frame=${defaultOutcome.frameHeight} content=${defaultOutcome.height}`,
   );
   await screenshot("preview-default.png");
+
+  // Price tiers (#42): Run the default script over the 4 sample cards.
+  const tierPreview = await runScriptPreview(
+    "price tiers",
+    await evaluate<string>(
+      `document.getElementById('voucher-template-script').value`,
+    ),
+  );
+  check(
+    "preview: after Run the 4 samples (₱5, ₱20, ₱50, ₱100) tier low,low,high,high",
+    tierPreview.status === "ready" && tierPreview.tiers === "low,low,high,high",
+    JSON.stringify(tierPreview),
+  );
+  // Greyscale legibility is judged by eye from this screenshot.
+  await screenshot("preview-price-tiers.png");
 
   const grow = await previewCase({
     name: "tall",
@@ -1082,13 +1120,13 @@ try {
     default_script: string;
   };
   check(
-    "script: API returns the saved script and an empty default_script",
-    stored.script === SAVED && stored.default_script === "",
+    "script: API returns the saved script and the price-tier default_script",
+    stored.script === SAVED && stored.default_script.includes("data-price"),
     JSON.stringify(stored),
   );
   await clickButton("Reset to default");
   await waitFor(
-    `document.getElementById('voucher-template-script').value === ''`,
+    `document.getElementById('voucher-template-script').value.includes('data-price')`,
     "script reset in editor",
   );
   await openVouchers("Template");
@@ -1107,7 +1145,7 @@ try {
     "script: reset restores HTML, CSS and script",
     afterReset.html === afterReset.default_html &&
       afterReset.css === afterReset.default_css &&
-      afterReset.script === "",
+      afterReset.script === afterReset.default_script,
   );
 
   // ---- Print path (real Voucher Batch).
@@ -1128,7 +1166,7 @@ try {
   const defaultHtml = (await ownerFetch(
     "GET",
     "/web-admin/voucher-template",
-  )) as { default_html: string; default_css: string };
+  )) as { default_html: string; default_css: string; default_script: string };
   const printDefault = await printCase({
     name: "default",
     html: defaultHtml.default_html,
@@ -1162,6 +1200,57 @@ try {
     60,
   );
   check("print: frame removed after afterprint", true);
+
+  // Price tiers (#42): the default script on a real batch. The fixture batch is
+  // priced ₱50.00, so every card is `high`; a ₱0.00 promo batch gets no tier.
+  const tierPrint = await printCase({
+    name: "price tiers",
+    html: defaultHtml.default_html,
+    css: defaultHtml.default_css,
+    script: defaultHtml.default_script,
+  });
+  check(
+    "price tier: a real ₱50 batch prints every card as high",
+    tierPrint.status === "ready" && tierPrint.tiers === "high,high,high",
+    JSON.stringify(tierPrint),
+  );
+  await waitFor(
+    `!document.querySelector('${printFrameSelector}')`,
+    "tier print frame removed",
+    60,
+  );
+  await openVouchers("Batches");
+  await waitFor(`document.body.innerText.includes('FREE')`, "free batch listed");
+  await evaluate(
+    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('FREE')).setAttribute('data-e2e-batch','')`,
+  );
+  await click("[data-e2e-batch]");
+  await waitFor(
+    `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Print')`,
+    "free batch detail",
+  );
+  await evaluate(
+    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Print').setAttribute('data-e2e-print','')`,
+  );
+  const freeCodes = batchCodes;
+  batchCodes = freeBatchCodes;
+  const freePrint = await printCase({
+    name: "free batch",
+    html: defaultHtml.default_html,
+    css: defaultHtml.default_css,
+    script: defaultHtml.default_script,
+  });
+  batchCodes = freeCodes;
+  check(
+    "price tier: a free (₱0.00) batch prints no tier",
+    freePrint.status === "ready" && freePrint.tiers === ",,",
+    JSON.stringify(freePrint),
+  );
+  await waitFor(
+    `!document.querySelector('${printFrameSelector}')`,
+    "free print frame removed",
+    60,
+  );
 
   const printLost = await printCase({
     name: "lost code",
