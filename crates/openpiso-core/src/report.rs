@@ -60,8 +60,6 @@ pub enum CashCollectionKind {
 }
 
 impl CashCollectionKind {
-    pub const ALL: [Self; 2] = [Self::CoinBox, Self::VoucherCash];
-
     /// The stored `cash_collections.kind` value.
     pub const fn as_str(self) -> &'static str {
         match self {

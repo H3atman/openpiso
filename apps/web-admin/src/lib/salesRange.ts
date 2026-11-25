@@ -1,10 +1,7 @@
 // Sales Report date ranges: presets, bucket size, and the client-side fill of
 // the sparse buckets the server returns. All dates are Admin business dates
 // (`YYYY-MM-DD`); arithmetic runs in UTC so the browser's zone never shifts one.
-import type { DailySalesPoint, ReportBucket } from "./types";
-
-export type SalesPreset = "today" | "week" | "month" | "last30";
-export type SalesBucket = "day" | "week" | "month";
+import type { DailySalesPoint, ReportBucket, ReportPeriod, SalesPreset } from "./types";
 
 /** Longest range (in days) drawn as day bars, and as week bars. */
 export const MAX_DAY_BUCKET_DAYS = 92;
@@ -64,7 +61,7 @@ export function rangeError(from: string, to: string): string | null {
 }
 
 /** Bars per day up to 92 days, per week up to 366 days, per month beyond. */
-export function bucketFor(from: string, to: string): SalesBucket {
+export function bucketFor(from: string, to: string): ReportPeriod {
   const days = (toMs(to) - toMs(from)) / DAY_MS + 1;
   if (days <= MAX_DAY_BUCKET_DAYS) return "day";
   if (days <= MAX_WEEK_BUCKET_DAYS) return "week";
@@ -72,7 +69,7 @@ export function bucketFor(from: string, to: string): SalesBucket {
 }
 
 /** Each bucket's label as it comes from the server, in order, for the range. */
-function bucketLabels(bucket: SalesBucket, from: string, to: string): string[] {
+function bucketLabels(bucket: ReportPeriod, from: string, to: string): string[] {
   const labels: string[] = [];
   if (bucket === "month") {
     const [fromYear, fromMonth] = from.split("-").map(Number) as [number, number];
@@ -94,7 +91,7 @@ function bucketLabels(bucket: SalesBucket, from: string, to: string): string[] {
  * the Admin's business `today` are left off: they are unwritten, not zero.
  */
 export function fillSeries(
-  bucket: SalesBucket,
+  bucket: ReportPeriod,
   from: string,
   to: string,
   buckets: readonly ReportBucket[],

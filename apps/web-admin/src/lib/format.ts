@@ -4,6 +4,7 @@ import type {
   HostExitReason,
   HostReachabilityFact,
   IncidentKind,
+  ReportPeriod,
 } from "./types";
 
 const pesoFormatter = new Intl.NumberFormat("en-PH", {
@@ -367,4 +368,11 @@ export function incidentKindHint(kind: IncidentKind): string {
     case "client_guard_coverage":
       return "This PC's Client reports no Guard connection. Check the Guard service and Client installation on that PC — Admin detects only and never repairs services.";
   }
+}
+
+/** X-axis tick for a sales bucket: day-of-month, "Mon D" for weeks, "Mon YYYY" for months. */
+export function axisLabel(bucket: ReportPeriod, value: Date): string {
+  if (bucket === "day") return String(value.getUTCDate());
+  const month = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(value);
+  return bucket === "week" ? `${month} ${value.getUTCDate()}` : `${month} ${value.getUTCFullYear()}`;
 }

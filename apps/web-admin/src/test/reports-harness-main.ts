@@ -17,9 +17,11 @@ import type {
   AttendanceReport,
   AttendanceReportInput,
   AttendanceReportPeriod,
+  CashOnHand,
   DiagnosticsMode,
   NotificationListResponse,
   NotificationUnreadCount,
+  PcSalesReport,
   ReportBucket,
   ReportSummary,
   SalesReportOverview,
@@ -130,6 +132,29 @@ const overview: SalesReportOverview = {
   monthly: { from_date: "2026-11-01", to_date: businessToday, cash_revenue_cents: empty ? 0 : monthlyCents },
   total: { from_date: null, to_date: null, cash_revenue_cents: empty ? 0 : totalCents },
   pcs: empty ? [] : pcs,
+};
+
+/** Per-PC split for the requested range; the PC rows come from the overview's PCs. */
+function pcSales(fromDate: string, toDate: string): PcSalesReport {
+  return {
+    from_date: fromDate,
+    to_date: toDate,
+    pcs: pcs.map((pc, index) => ({
+      id: pc.id,
+      name: pc.name,
+      coin_sales_cents: empty ? 0 : pc.monthly_sales_cents,
+      voucher_sales_cents: empty ? 0 : index === 0 ? 500 : 0,
+    })),
+    unassigned: { coin_sales_cents: 0, voucher_sales_cents: empty ? 0 : 2_000 },
+  };
+}
+
+const cashOnHand: CashOnHand = {
+  coin_box: {
+    uncollected_cents: empty ? 0 : 12_500,
+    last_collection: empty ? null : { amount_cents: 4_000, collected_at: "2026-11-20 08:30:00" },
+  },
+  voucher_cash: { uncollected_cents: 0, last_collection: null },
 };
 
 // --- Attendance ---
@@ -282,6 +307,11 @@ const fixtures: Record<string, (request: Request) => unknown> = {
     const body = (await request.json()) as { from_date: string; to_date: string };
     return summary(body.from_date, body.to_date);
   },
+  "POST /web-admin/reports/pc-sales": async (request) => {
+    const body = (await request.json()) as { from_date: string; to_date: string };
+    return pcSales(body.from_date, body.to_date);
+  },
+  "GET /web-admin/cash-on-hand": () => cashOnHand,
   "POST /web-admin/reports/attendance": async (request) =>
     attendance((await request.json()) as AttendanceReportInput),
   "POST /web-admin/activity": () => ({ ok: true }),
