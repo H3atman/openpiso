@@ -1927,8 +1927,8 @@ list, create, download, delete, schedule, or restore Backups.
 | `GET /web-admin/voucher-batches/{id}`              | –                              | get one batch with redemption progress and its cards                                                                                   |
 | `POST /web-admin/voucher-batches`                  | –                              | create a batch of 1–1000 vouchers (see payload below)                                                                                  |
 | `POST /web-admin/voucher-batches/{id}/void`        | –                              | void all active cards in the batch                                                                                                     |
-| `GET /web-admin/voucher-template`                  | –                              | owner-only `{ html, css, default_html, default_css }` Voucher Template read                                                            |
-| `PUT /web-admin/voucher-template`                  | –                              | owner-only full update: `{ "html": string, "css": string }`; each part required and limited to 100,000 bytes                           |
+| `GET /web-admin/voucher-template`                  | –                              | owner-only `{ html, css, script, default_html, default_css, default_script }` Voucher Template read                                                            |
+| `PUT /web-admin/voucher-template`                  | –                              | owner-only full update: `{ "html": string, "css": string, "script": string }`; `html` and `css` non-blank, `script` may be empty, each limited to 100,000 bytes                           |
 | `GET /web-admin/wheel`                             | `get_wheel_settings`           |                                                                                                                                        |
 | `PUT /web-admin/wheel`                             | `update_wheel_settings`        |                                                                                                                                        |
 | `GET /web-admin/accounts`                          | `list_accounts`                | owner-authenticated array; includes nullable `last_login_at` derived from the latest successful `login_succeeded` Audit Log event                                                                             |
@@ -2544,7 +2544,9 @@ Unexpected database failures roll back the entire run.
 Voucher Template HTML supports `{{code}}`, `{{time}}`, `{{points}}`,
 `{{price}}`, `{{shop_name}}`, `{{expires_at}}`, and `{{prefix}}`. Rendering and
 printing happen only in sandboxed owner-browser iframes. Values are HTML-escaped,
-script elements are removed, and the generated document applies a no-script CSP.
+script elements are removed from the card HTML, and every card must still contain
+its own code after cleaning or the render fails. The generated document applies a
+nonce-only CSP (`script-src 'nonce-…'`) that runs just the Template Script (ADR-0092).
 The template CSS owns `@page`, grid, and page-break layout.
 
 Request bodies are the same shapes the retired Tauri commands accepted.

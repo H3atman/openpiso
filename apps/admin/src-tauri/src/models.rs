@@ -1523,14 +1523,17 @@ pub struct AdminSettings {
 pub struct VoucherTemplate {
     pub html: String,
     pub css: String,
+    pub script: String,
     pub default_html: String,
     pub default_css: String,
+    pub default_script: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct VoucherTemplateInput {
     pub html: String,
     pub css: String,
+    pub script: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

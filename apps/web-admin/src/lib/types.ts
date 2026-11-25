@@ -282,13 +282,22 @@ export interface VoucherBatchDetail extends VoucherBatchSummary {
 export interface VoucherTemplate {
   html: string;
   css: string;
+  script: string;
   default_html: string;
   default_css: string;
+  default_script: string;
 }
+
+/** Outcome of one sandboxed Voucher Template render. */
+export type RenderResult =
+  | { type: "ready"; height: number }
+  | { type: "error"; message: string }
+  | { type: "timeout"; message: string };
 
 export interface VoucherTemplateInput {
   html: string;
   css: string;
+  script: string;
 }
 
 export interface CreateVoucherBatchInput {

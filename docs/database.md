@@ -461,8 +461,12 @@ Canonical audit event types added in migration 0016:
 Migration `0018_voucher_template.sql` seeds the shop-wide Voucher Template in
 `settings` as `voucher_template_html` and `voucher_template_css`. The built-in
 card includes every supported placeholder and the CSS owns `@page`, the card
-grid, and page-break rules. Owner updates replace both values in one SQLite
-transaction. The template is never exposed by the customer API; only the
+grid, and page-break rules. The optional Template Script (ADR-0092) lives in
+`voucher_template_script`. Migration `0061_voucher_price_tier_default.sql`
+upgrades a template whose HTML and CSS both still equal the 0018 default to the
+price-tier default (`data-price` card, tier strip CSS, default script); any other
+template is untouched and gets an empty script. The migration text must stay
+byte-identical to `DEFAULT_VOUCHER_TEMPLATE_*` in `db/settings.rs`. Owner updates replace all three values in one SQLite transaction. The template is never exposed by the customer API; only the
 owner-session-guarded `:8080` endpoints read or update it.
 
 ## M4 coin-device settings (Central Terminal)

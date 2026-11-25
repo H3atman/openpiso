@@ -1086,12 +1086,22 @@ Minting audits once per batch, not per card. See
 
 ### Voucher Template **(decided)**
 
-The single shop-wide owner-authored HTML+CSS per-card fragment (no JS in v1)
-that the print view repeats per Voucher, substituting placeholder tokens
-(code, time, points, price, shop name, expiry, prefix). Stored in settings,
-edited in web-admin with live preview and reset-to-default. Rendering happens
-only in the owner's sandboxed browser frame; no customer surface executes it.
-See [ADR-0041](adr/0041-voucher-template.md).
+The single shop-wide owner-authored card layout: an HTML per-card fragment the
+print view repeats per Voucher, substituting placeholder tokens (code, time,
+points, price, shop name, expiry, prefix), plus CSS and a **Template Script**.
+Stored in settings, edited in web-admin with live preview and reset-to-default.
+Rendering happens only in the owner's isolated sandboxed browser frame; no
+customer surface executes it. See [ADR-0041](adr/0041-voucher-template.md) and
+[ADR-0092](adr/0092-voucher-template-script.md).
+
+### Template Script **(decided)**
+
+The optional owner-authored JavaScript part of the **Voucher Template**. It runs
+once per rendered document (preview or print), after every card is in place, and
+reads card data from the cards themselves; placeholder tokens are never
+substituted into it. It cannot reach the **Owner Session**, but it can navigate
+its own frame and so send Voucher codes elsewhere: it is trusted **Owner** code,
+and only an Owner edits it.
 
 ### Owner **(decided context)**
 

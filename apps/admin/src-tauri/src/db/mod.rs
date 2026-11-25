@@ -102,7 +102,7 @@ pub use voucher_batches::{
 };
 pub use vouchers::{create_voucher, redeem_voucher, void_voucher, vouchers};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 60;
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 61;
 
 pub async fn connect(database_path: &Path, backup_directory: &Path) -> AppResult<SqlitePool> {
     let options = SqliteConnectOptions::new()
@@ -378,6 +378,10 @@ pub(crate) async fn run_migrations(pool: &SqlitePool, backup_directory: &Path) -
         (
             60_i64,
             include_str!("../../migrations/0060_cash_collections.sql"),
+        ),
+        (
+            61_i64,
+            include_str!("../../migrations/0061_voucher_price_tier_default.sql"),
         ),
     ];
     let known_version = migrations.last().map(|(version, _)| *version).unwrap_or(0);
@@ -1115,6 +1119,82 @@ mod tests {
             assert_eq!(actual, expected);
         }
         Ok(())
+    }
+
+    /// A settings table holding the 0018 default with `customise` applied on top.
+    async fn old_default_pool(customise: &str) -> AppResult<sqlx::SqlitePool> {
+        let pool = crate::test_utils::schema_v12_mem_pool().await;
+        sqlx::raw_sql(include_str!("../../migrations/0018_voucher_template.sql"))
+            .execute(&pool)
+            .await?;
+        if !customise.is_empty() {
+            sqlx::raw_sql(customise).execute(&pool).await?;
+        }
+        Ok(pool)
+    }
+
+    async fn setting(pool: &sqlx::SqlitePool, key: &str) -> AppResult<String> {
+        Ok(
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+                .bind(key)
+                .fetch_one(pool)
+                .await?,
+        )
+    }
+
+    /// Runs 0061 over the old default (after `customise`) and returns the stored
+    /// (html, css, script).
+    async fn price_tier_upgrade(customise: &str) -> AppResult<(String, String, String)> {
+        let pool = old_default_pool(customise).await?;
+        sqlx::raw_sql(include_str!(
+            "../../migrations/0061_voucher_price_tier_default.sql"
+        ))
+        .execute(&pool)
+        .await?;
+        Ok((
+            setting(&pool, "voucher_template_html").await?,
+            setting(&pool, "voucher_template_css").await?,
+            setting(&pool, "voucher_template_script").await?,
+        ))
+    }
+
+    #[tokio::test]
+    async fn price_tier_migration_upgrades_the_untouched_old_default() -> AppResult<()> {
+        use crate::db::settings::{
+            DEFAULT_VOUCHER_TEMPLATE_CSS, DEFAULT_VOUCHER_TEMPLATE_HTML,
+            DEFAULT_VOUCHER_TEMPLATE_SCRIPT,
+        };
+        let (html, css, script) = price_tier_upgrade("").await?;
+        assert_eq!(html, DEFAULT_VOUCHER_TEMPLATE_HTML);
+        assert_eq!(css, DEFAULT_VOUCHER_TEMPLATE_CSS);
+        assert_eq!(script, DEFAULT_VOUCHER_TEMPLATE_SCRIPT);
+        assert!(html.contains(r#"data-price="{{price}}""#));
+        assert!(!script.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn price_tier_migration_leaves_customised_templates_untouched() -> AppResult<()> {
+        // Customising either half is enough to opt out of the upgrade.
+        for customise in [
+            "UPDATE settings SET value = '<p>{{code}}</p>' WHERE key = 'voucher_template_html'",
+            "UPDATE settings SET value = value || ' ' WHERE key = 'voucher_template_css'",
+        ] {
+            let before = price_tier_upgrade_old_default(customise).await?;
+            let (html, css, script) = price_tier_upgrade(customise).await?;
+            assert_eq!((html, css), before);
+            assert_eq!(script, "");
+        }
+        Ok(())
+    }
+
+    /// The (html, css) a customised install holds before 0061 runs.
+    async fn price_tier_upgrade_old_default(customise: &str) -> AppResult<(String, String)> {
+        let pool = old_default_pool(customise).await?;
+        Ok((
+            setting(&pool, "voucher_template_html").await?,
+            setting(&pool, "voucher_template_css").await?,
+        ))
     }
 
     #[tokio::test]

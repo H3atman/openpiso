@@ -1,11 +1,26 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import * as api from "../api";
+  import BanIcon from "@lucide/svelte/icons/ban";
+  import DownloadIcon from "@lucide/svelte/icons/download";
+  import LayersIcon from "@lucide/svelte/icons/layers";
+  import PlayIcon from "@lucide/svelte/icons/play";
+  import PrinterIcon from "@lucide/svelte/icons/printer";
+  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+  import SearchIcon from "@lucide/svelte/icons/search";
+  import TicketIcon from "@lucide/svelte/icons/ticket";
+  import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import ConfirmDialog from "../components/ConfirmDialog.svelte";
+  import DurationFields from "../components/DurationFields.svelte";
+  import LoadErrorNotice from "../components/LoadErrorNotice.svelte";
   import {
     formatMoney,
     formatDuration,
-    formatDayDuration,
+    formatProseDuration,
     formatDate,
+    formatDateShort,
     formatPoints,
     parsePesosToCents,
     parsePointsToCenti,
@@ -13,10 +28,12 @@
   import type {
     AdminSettings,
     EconomySettings,
+    RenderResult,
     Voucher,
     VoucherBatchDetail,
     VoucherBatchSummary,
     VoucherTemplate,
+    VoucherTemplateInput,
   } from "../types";
   import { reportActionFailure, reportActionSuccess } from "../notifications";
   import ResponsiveRows from "../components/ResponsiveRows.svelte";
@@ -24,6 +41,7 @@
   import { buildVoucherBatchCsv } from "../voucherCsv";
   import {
     buildVoucherDocument,
+    runVoucherFrame,
     type VoucherTokenValues,
   } from "../voucherTemplate";
 
@@ -37,10 +55,66 @@
     prefix: "DEMO",
   };
 
+  // One preview card per price tier boundary (the default script tiers at ₱50).
+  const SAMPLE_PRICES = ["₱5.00", "₱20.00", "₱50.00", "₱100.00"];
+
   const BATCH_PAGE_SIZE = 100;
   const VOUCHER_PAGE_SIZE = 100;
 
-  let tab = $state<"vouchers" | "batches" | "template">("vouchers");
+  const pageTabs = [
+    { key: "vouchers", label: "Vouchers" },
+    { key: "batches", label: "Batches" },
+    { key: "template", label: "Template" },
+  ] as const;
+  let tab = $state<(typeof pageTabs)[number]["key"]>("vouchers");
+
+  // Shared control classes, matching the Input primitive's height and focus ring.
+  const SELECT_CLASS =
+    "block min-h-11 w-full rounded-lg border border-input bg-background px-2.5 text-base text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none md:h-8 md:min-h-0 md:text-sm dark:bg-input/30 dark:scheme-dark";
+  const EDITOR_CLASS =
+    "block h-[26rem] w-full resize-y rounded-lg border border-input bg-background p-3 font-mono text-xs leading-relaxed focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-md:h-80 dark:bg-input/30";
+
+  const STATUS_STYLE: Record<Voucher["status"], { label: string; pill: string; dot: string }> = {
+    active: { label: "Active", pill: "text-foreground", dot: "bg-emerald-500" },
+    redeemed: { label: "Redeemed", pill: "border-transparent bg-secondary text-secondary-foreground", dot: "bg-primary" },
+    voided: { label: "Voided", pill: "border-dashed text-muted-foreground", dot: "bg-muted-foreground/60" },
+  };
+
+  /** Arrow/Home/End movement across a tablist; the new tab is selected and focused. */
+  function tabKeydown<K extends string>(
+    event: KeyboardEvent,
+    keys: readonly K[],
+    current: K,
+    select: (key: K) => void,
+    idPrefix: string,
+  ) {
+    const last = keys.length - 1;
+    const index = keys.indexOf(current);
+    const next =
+      event.key === "ArrowRight" ? (index === last ? 0 : index + 1)
+      : event.key === "ArrowLeft" ? (index === 0 ? last : index - 1)
+      : event.key === "Home" ? 0
+      : event.key === "End" ? last
+      : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    select(keys[next]);
+    document.getElementById(`${idPrefix}${keys[next]}`)?.focus();
+  }
+
+  /** The kind a cash amount implies (sold when above zero), or null when unparseable. */
+  function cashKind(pesos: string): { kind: Voucher["kind"]; cents: number } | null {
+    const cents = parsePesosToCents(pesos);
+    return cents === null ? null : { kind: cents > 0 ? "sold" : "promo", cents };
+  }
+
+  /** What the owner is about to void; the ConfirmDialog is open while set. */
+  type VoidTarget =
+    | { kind: "voucher"; voucher: Voucher }
+    | { kind: "batch"; id: string; name: string; prefix: string };
+  let voidTarget = $state<VoidTarget | null>(null);
+  let voidBusy = $state(false);
+  let detailHeading = $state<HTMLElement>();
   let vouchers = $state<Voucher[]>([]);
   let batches = $state<VoucherBatchSummary[]>([]);
   let selectedBatchId = $state("");
@@ -85,15 +159,84 @@
   let economySettings = $state<EconomySettings | null>(null);
   let templateHtml = $state("");
   let templateCss = $state("");
+  let templateScript = $state("");
+  const editorTabs = [
+    { key: "html", label: "Card HTML" },
+    { key: "css", label: "Template CSS" },
+    { key: "script", label: "Template Script" },
+  ] as const;
+  let editorTab = $state<(typeof editorTabs)[number]["key"]>("html");
+  // The Template Script as of the last Run click; a fresh object per click so
+  // running the same text again re-renders. The preview never runs unrun text.
+  let scriptRun = $state<{ script: string } | null>(null);
   let templateBusy = $state(false);
-  let previewDocument = $derived(
-    buildVoucherDocument({ html: templateHtml, css: templateCss }, [
-      {
-        ...SAMPLE_VALUES,
-        shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
-      },
-    ]),
+  let previewFrame = $state<HTMLIFrameElement>();
+  let previewStatus = $state<"rendering" | RenderResult["type"]>("rendering");
+  let previewMessage = $state("");
+  let previewHeight = $state<number | null>(null);
+  let previewSeq = $state(0);
+  let previewRenders = 0;
+  let templateDirty = $derived(
+    voucherTemplate !== null &&
+      (templateHtml !== voucherTemplate.html ||
+        templateCss !== voucherTemplate.css ||
+        templateScript !== voucherTemplate.script),
   );
+  // Whether the preview shows the Template Script as it is now in the editor.
+  let scriptState = $derived(
+    scriptRun === null ? "not-run" : scriptRun.script === templateScript ? "applied" : "stale",
+  );
+  let filtersActive = $derived(
+    selectedBatchId !== "" || voucherStatus !== "active" || codeSearch !== "",
+  );
+  let voucherCashKind = $derived(cashKind(cashAmountPesos));
+  let batchCashKind = $derived(cashKind(batchCashAmountPesos));
+  // Cleaning can fail (a card loses its code); that is shown like any render error.
+  let previewDocument = $derived.by<
+    { srcdoc: string; error?: undefined } | { error: string; srcdoc?: undefined }
+  >(() => {
+    try {
+      return {
+        srcdoc: buildVoucherDocument(
+          {
+            html: templateHtml,
+            css: templateCss,
+            script: scriptRun?.script,
+          },
+          SAMPLE_PRICES.map((price) => ({
+            ...SAMPLE_VALUES,
+            price,
+            shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
+          })),
+        ),
+      };
+    } catch (caught) {
+      return { error: caughtMessage(caught) };
+    }
+  });
+
+  // Re-render the sandboxed preview frame whenever the template changes.
+  $effect(() => {
+    const frame = previewFrame;
+    const built = previewDocument;
+    if (!frame) return;
+    previewSeq = ++previewRenders;
+    previewStatus = "rendering";
+    previewMessage = "";
+    if (built.error !== undefined) {
+      frame.srcdoc = "";
+      previewStatus = "error";
+      previewMessage = built.error;
+      return;
+    }
+    return runVoucherFrame(frame, built.srcdoc, {
+      onResult(result) {
+        previewStatus = result.type;
+        if (result.type === "ready") previewHeight = result.height;
+        else previewMessage = result.message;
+      },
+    });
+  });
 
   async function load() {
     busy = true;
@@ -134,6 +277,7 @@
       voucherTemplate = results[3].value;
       templateHtml = results[3].value.html;
       templateCss = results[3].value.css;
+      templateScript = results[3].value.script;
     }
     if (results[4].status === "fulfilled") adminSettings = results[4].value;
     if (results[5].status === "fulfilled") {
@@ -446,15 +590,19 @@
   }
 
   async function saveTemplate(
-    html = templateHtml,
-    css = templateCss,
+    parts: VoucherTemplateInput = {
+      html: templateHtml,
+      css: templateCss,
+      script: templateScript,
+    },
     action: "save" | "reset" = "save",
   ) {
     templateBusy = true;
     try {
-      voucherTemplate = await api.updateVoucherTemplate({ html, css });
+      voucherTemplate = await api.updateVoucherTemplate(parts);
       templateHtml = voucherTemplate.html;
       templateCss = voucherTemplate.css;
+      templateScript = voucherTemplate.script;
       reportActionSuccess(action, "Voucher Template");
     } catch (caught) {
       reportActionFailure(action, "Voucher Template", caught);
@@ -465,9 +613,13 @@
 
   async function resetTemplate() {
     if (!voucherTemplate) return;
+    scriptRun = null;
     await saveTemplate(
-      voucherTemplate.default_html,
-      voucherTemplate.default_css,
+      {
+        html: voucherTemplate.default_html,
+        css: voucherTemplate.default_css,
+        script: voucherTemplate.default_script,
+      },
       "reset",
     );
   }
@@ -498,52 +650,51 @@
         api.getSettings(),
       ]);
       detail = freshDetail;
-      voucherTemplate = freshTemplate;
       adminSettings = freshSettings;
-      templateHtml = freshTemplate.html;
-      templateCss = freshTemplate.css;
 
+      // The saved template is for the print document only; the editor keeps its unsaved text.
+      // Build first: a card that loses its code throws before any frame exists.
+      const srcdoc = buildVoucherDocument(
+        freshTemplate,
+        freshDetail.vouchers.map((card) =>
+          tokenValuesForCard(card, freshDetail, freshSettings.shop_name),
+        ),
+        { print: true },
+      );
+
+      // The frame is cross-origin, so it calls its own print() once ready.
       const printFrame = document.createElement("iframe");
       printFrame.title = `Print ${freshDetail.name} voucher batch`;
-      printFrame.setAttribute("sandbox", "allow-same-origin allow-modals");
+      printFrame.setAttribute("sandbox", "allow-scripts allow-modals");
+      printFrame.dataset.voucherPrint = "";
+      printFrame.dataset.renderStatus = "rendering";
       printFrame.style.position = "fixed";
       printFrame.style.width = "1px";
       printFrame.style.height = "1px";
       printFrame.style.border = "0";
       printFrame.style.opacity = "0";
-      const cleanup = () => printFrame.remove();
-      printFrame.addEventListener(
-        "load",
-        () => {
-          const printWindow = printFrame.contentWindow;
-          if (!printWindow) {
-            cleanup();
-            reportActionFailure(
-              "print",
-              "Voucher Batch",
-              new Error("Print window unavailable"),
-            );
+      let stop = () => {};
+      const cleanup = () => {
+        stop();
+        printFrame.remove();
+      };
+      document.body.append(printFrame);
+      stop = runVoucherFrame(printFrame, srcdoc, {
+        onResult(result) {
+          printFrame.dataset.renderStatus = result.type;
+          if (result.type === "ready") {
+            window.setTimeout(cleanup, 60_000);
             return;
           }
-          try {
-            printWindow.addEventListener("afterprint", cleanup, { once: true });
-            printWindow.focus();
-            printWindow.print();
-            window.setTimeout(cleanup, 60_000);
-          } catch (caught) {
-            cleanup();
-            reportActionFailure("print", "Voucher Batch", caught);
-          }
+          cleanup();
+          reportActionFailure(
+            "print",
+            "Voucher Batch",
+            new Error(result.message),
+          );
         },
-        { once: true },
-      );
-      printFrame.srcdoc = buildVoucherDocument(
-        freshTemplate,
-        freshDetail.vouchers.map((card) =>
-          tokenValuesForCard(card, freshDetail, freshSettings.shop_name),
-        ),
-      );
-      document.body.append(printFrame);
+        onAfterPrint: cleanup,
+      });
     } catch (caught) {
       reportActionFailure("print", "Voucher Batch", caught);
     } finally {
@@ -551,81 +702,106 @@
     }
   }
 
-  async function voidVoucher(voucher: Voucher) {
-    const revenueWarning =
-      voucher.kind === "sold"
-        ? " Recorded revenue remains unchanged."
-        : "";
-    if (
-      !window.confirm(
-        `Void active voucher ${voucher.code}? This cannot be undone.${revenueWarning}`,
-      )
-    )
-      return;
-    busy = true;
-    try {
-      await api.voidVoucher(voucher.id);
-      await load();
-      reportActionSuccess("void", "Voucher");
-    } catch (caught) {
-      reportActionFailure("void", "Voucher", caught);
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function voidSelectedBatch() {
+  function askVoidSelectedBatch() {
     const batch = batches.find((candidate) => candidate.id === selectedBatchId);
-    if (
-      !batch ||
-      !window.confirm(
-        `Void all active ${batch.name} (${batch.prefix}) cards? This cannot be undone.`,
-      )
-    )
-      return;
-    busy = true;
+    if (batch)
+      voidTarget = { kind: "batch", id: batch.id, name: batch.name, prefix: batch.prefix };
+  }
+
+  /** Runs the void the ConfirmDialog asked about; the outcome is a toast either way. */
+  async function confirmVoid() {
+    const target = voidTarget;
+    if (!target) return;
+    const subject = target.kind === "voucher" ? "Voucher" : "Voucher Batch";
+    voidBusy = true;
     try {
-      await api.voidVoucherBatch(batch.id);
+      if (target.kind === "voucher") await api.voidVoucher(target.voucher.id);
+      else await api.voidVoucherBatch(target.id);
+      voidTarget = null;
       await load();
-      reportActionSuccess("void", "Voucher Batch");
+      reportActionSuccess("void", subject);
     } catch (caught) {
-      reportActionFailure("void", "Voucher Batch", caught);
+      voidTarget = null;
+      reportActionFailure("void", subject, caught);
     } finally {
-      busy = false;
+      voidBusy = false;
     }
   }
 
-  async function voidBatch() {
-    if (
-      !detail ||
-      !window.confirm(
-        `Void all active ${detail.name} (${detail.prefix}) cards? This cannot be undone.`,
-      )
-    )
-      return;
-    batchBusy = true;
-    try {
-      await api.voidVoucherBatch(detail.id);
-      await load();
-      reportActionSuccess("void", "Voucher Batch");
-    } catch (caught) {
-      reportActionFailure("void", "Voucher Batch", caught);
-    } finally {
-      batchBusy = false;
-    }
+  /** Opens a batch from the list and moves focus to its detail (it sits below the list on narrow screens). */
+  async function selectBatch(id: string) {
+    await openBatch(id);
+    if (detail?.id !== id) return;
+    await tick();
+    detailHeading?.focus();
+  }
+
+  async function clearVoucherFilters() {
+    selectedBatchId = "";
+    voucherStatus = "active";
+    codeSearchInput = "";
+    codeSearch = "";
+    voucherOffset = 0;
+    await load();
+  }
+
+  function batchLabel(v: Voucher): string {
+    return v.batch_name && v.batch_prefix
+      ? `${v.batch_name} · ${v.batch_prefix}`
+      : "Single voucher";
+  }
+
+  function redeemedPercent(batch: VoucherBatchSummary): number {
+    return batch.count > 0 ? Math.round((batch.redeemed_count / batch.count) * 100) : 0;
   }
 
   onMount(load);
 </script>
 
+{#snippet statusBadge(status: Voucher["status"])}
+  {@const style = STATUS_STYLE[status]}
+  <Badge variant="outline" class="gap-1.5 {style.pill}">
+    <span class="size-1.5 rounded-full {style.dot}" aria-hidden="true"></span>
+    {style.label}
+  </Badge>
+{/snippet}
+
+{#snippet kindText(kind: Voucher["kind"])}
+  <span class={kind === "sold" ? "text-foreground" : "text-muted-foreground"}>
+    {kind === "sold" ? "Sold" : "Promo"}
+  </span>
+{/snippet}
+
+{#snippet progress(batch: VoucherBatchSummary)}
+  <span class="block h-1.5 overflow-hidden rounded-full bg-foreground/10" aria-hidden="true">
+    <span class="block h-full rounded-full bg-primary" style:width="{redeemedPercent(batch)}%"></span>
+  </span>
+{/snippet}
+
+{#snippet cashHint(id: string, kind: ReturnType<typeof cashKind>, perCard: boolean)}
+  {#if kind === null}
+    <p {id} class="mt-1.5 text-xs text-destructive">Enter a non-negative peso amount.</p>
+  {:else if kind.kind === "sold"}
+    <p {id} class="mt-1.5 text-xs text-muted-foreground">
+      Sold · {formatMoney(kind.cents)}{perCard ? " per card" : ""}
+    </p>
+  {:else}
+    <p {id} class="mt-1.5 text-xs text-muted-foreground">Promo · no cash collected</p>
+  {/if}
+{/snippet}
+
 <div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <h2 class="text-2xl font-bold tracking-tight">Vouchers</h2>
-    <button
-      class="rounded-md border bg-card px-3 py-1.5 text-sm hover:bg-accent"
-      type="button"
-      onclick={load}>Refresh</button
-    >
+  <div class="flex items-start justify-between gap-4">
+    <div class="min-w-0">
+      <h2 class="text-2xl font-bold tracking-tight">Vouchers</h2>
+      <p class="text-sm text-muted-foreground">
+        Create single Vouchers, generate printable Voucher Batches, and design the printed card.
+      </p>
+    </div>
+    <Button variant="outline" onclick={load}>
+      <RefreshCwIcon aria-hidden="true" />
+      Refresh
+    </Button>
   </div>
 
   <div
@@ -633,161 +809,211 @@
     role="tablist"
     aria-label="Voucher management"
   >
-    {#each [["vouchers", "Vouchers"], ["batches", "Batches"], ["template", "Template"]] as item}
+    {#each pageTabs as item (item.key)}
       <button
         type="button"
         role="tab"
-        aria-selected={tab === item[0]}
-        class="border-b-2 px-4 py-2 text-sm font-medium {tab === item[0]
+        id="vouchers-tab-{item.key}"
+        aria-selected={tab === item.key}
+        aria-controls={tab === item.key ? `vouchers-panel-${item.key}` : undefined}
+        tabindex={tab === item.key ? 0 : -1}
+        class="-mb-px border-b-2 px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors focus-visible:rounded-t-md focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none {tab === item.key
           ? 'border-primary text-foreground'
-          : 'border-transparent text-muted-foreground'}"
-        onclick={() => (tab = item[0] as typeof tab)}>{item[1]}</button
+          : 'border-transparent text-muted-foreground hover:text-foreground'}"
+        onclick={() => (tab = item.key)}
+        onkeydown={(event) =>
+          tabKeydown(event, pageTabs.map((t) => t.key), tab, (key) => (tab = key), "vouchers-tab-")}
+        >{item.label}</button
       >
     {/each}
   </div>
 
-  {#if auxiliaryLoadError}<div
-      class="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+  {#if auxiliaryLoadError}
+    <div
+      class="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+      role="alert"
     >
       {auxiliaryLoadError}
-    </div>{/if}
+    </div>
+  {/if}
 
+  <div
+    id="vouchers-panel-{tab}"
+    role="tabpanel"
+    aria-labelledby="vouchers-tab-{tab}"
+    class="space-y-6"
+  >
   {#if tab === "vouchers"}
-    <div class="rounded-lg border bg-card p-6">
-      <h3 class="mb-4 text-lg font-semibold">Create Voucher</h3>
-      <div class="space-y-4">
-        <div class="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label class="block text-sm font-medium" for="voucher-prefix">Prefix</label>
-            <input
-              id="voucher-prefix"
-              required
-              minlength="2"
-              maxlength="8"
-              pattern="[A-Za-z0-9]+"
-              class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm uppercase"
-              bind:value={voucherPrefix}
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium" for="voucher-suffix">Suffix length</label>
-            <input
-              id="voucher-suffix"
-              required
-              min="6"
-              max="16"
-              type="number"
-              class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-              bind:value={voucherSuffixLength}
-            />
-          </div>
+    <form
+      class="rounded-lg border bg-card"
+      aria-labelledby="create-voucher-heading"
+      onsubmit={(event) => {
+        event.preventDefault();
+        createVoucher();
+      }}
+    >
+      <div class="border-b px-4 py-3">
+        <h3 id="create-voucher-heading" class="font-semibold">Create Voucher</h3>
+        <p class="text-sm text-muted-foreground">
+          One code to sell at the counter or give away. Cash above ₱0 makes it a sold Voucher.
+        </p>
+      </div>
+      <div class="grid gap-x-4 gap-y-5 p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="voucher-prefix">Prefix</label>
+          <Input
+            id="voucher-prefix"
+            required
+            minlength={2}
+            maxlength={8}
+            pattern="[A-Za-z0-9]+"
+            autocomplete="off"
+            class="uppercase"
+            aria-describedby="voucher-prefix-hint"
+            bind:value={voucherPrefix}
+          />
+          <p id="voucher-prefix-hint" class="mt-1.5 text-xs text-muted-foreground">2–8 letters or numbers</p>
         </div>
-        <div>
-          <span class="block text-sm font-medium">Time (DD:HH:mm:ss)</span>
-          <div class="mt-1 grid grid-cols-4 gap-2">
-            <label class="text-xs text-muted-foreground">Days
-              <input min="0" max="99" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={voucherDays} />
-            </label>
-            <label class="text-xs text-muted-foreground">Hours
-              <input min="0" max="23" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={voucherHours} />
-            </label>
-            <label class="text-xs text-muted-foreground">Minutes
-              <input min="0" max="59" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={voucherMinutes} />
-            </label>
-            <label class="text-xs text-muted-foreground">Seconds
-              <input min="0" max="59" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={voucherSeconds} />
-            </label>
-          </div>
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="voucher-suffix">Suffix length</label>
+          <Input
+            id="voucher-suffix"
+            required
+            min="6"
+            max="16"
+            type="number"
+            inputmode="numeric"
+            class="tabular-nums"
+            aria-describedby="voucher-suffix-hint"
+            bind:value={voucherSuffixLength}
+          />
+          <p id="voucher-suffix-hint" class="mt-1.5 text-xs text-muted-foreground">6–16 random characters</p>
         </div>
-        <div class="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label class="block text-sm font-medium" for="voucher-cash"
-              >Cash amount (pesos)</label
-            >
-            <input
-              id="voucher-cash"
-              type="text"
-              inputmode="decimal"
-              placeholder="0.00"
-              class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-              value={cashAmountPesos}
-              oninput={(event) => {
-                cashAmountPesos = event.currentTarget.value;
-                refreshVoucherAutoPoints();
-              }}
-            />
-            <p class="mt-1 text-xs text-muted-foreground">
-              {parsePesosToCents(cashAmountPesos) === null
-                ? "Enter a non-negative peso amount"
-                : parsePesosToCents(cashAmountPesos)! > 0
-                  ? `Sold · ${formatMoney(parsePesosToCents(cashAmountPesos)!)}`
-                  : "Promo"}
-            </p>
-          </div>
-          <div>
-            <div class="flex items-center justify-between gap-2">
-              <label class="block text-sm font-medium" for="voucher-points"
-                >Points Value</label
-              >
-              {#if voucherPointsAuto}
-                <span class="text-xs text-muted-foreground">Auto from earn rate</span>
-              {:else if economySettings}
-                <button type="button" class="text-xs text-primary hover:underline" onclick={() => {
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="voucher-cash">Cash amount (₱)</label>
+          <Input
+            id="voucher-cash"
+            type="text"
+            inputmode="decimal"
+            placeholder="0.00"
+            class="tabular-nums"
+            aria-describedby="voucher-cash-hint"
+            aria-invalid={voucherCashKind === null ? true : undefined}
+            value={cashAmountPesos}
+            oninput={(event: Event & { currentTarget: HTMLInputElement }) => {
+              cashAmountPesos = event.currentTarget.value;
+              refreshVoucherAutoPoints();
+            }}
+          />
+          {@render cashHint("voucher-cash-hint", voucherCashKind, false)}
+        </div>
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="voucher-points">Points</label>
+          <Input
+            id="voucher-points"
+            type="text"
+            inputmode="decimal"
+            placeholder="e.g. 1.50"
+            class="tabular-nums"
+            aria-describedby="voucher-points-hint"
+            value={pointsValue}
+            oninput={(event: Event & { currentTarget: HTMLInputElement }) => {
+              voucherPointsAuto = false;
+              pointsValue = event.currentTarget.value;
+            }}
+          />
+          <p id="voucher-points-hint" class="mt-1.5 text-xs {economySettings ? 'text-muted-foreground' : 'text-destructive'}">
+            {#if voucherPointsAuto}
+              Auto from the earn rate
+            {:else if economySettings}
+              Custom value ·
+              <button
+                type="button"
+                class="font-medium text-primary underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+                onclick={() => {
                   voucherPointsAuto = true;
                   refreshVoucherAutoPoints();
-                }}>Reset to auto</button>
-              {:else}
-                <span class="text-xs text-muted-foreground">Custom</span>
+                }}>Reset to auto</button
+              >
+            {:else}
+              Auto points unavailable; enter a custom value.
+            {/if}
+          </p>
+        </div>
+        <DurationFields
+          idPrefix="voucher-time"
+          class="sm:col-span-2"
+          bind:days={voucherDays}
+          bind:hours={voucherHours}
+          bind:minutes={voucherMinutes}
+          bind:seconds={voucherSeconds}
+        />
+      </div>
+      <div class="flex flex-wrap items-center justify-end gap-3 border-t px-4 py-3">
+        <Button type="submit" class="max-md:w-full" disabled={createBusy}>
+          {createBusy ? "Creating…" : "Create Voucher"}
+        </Button>
+      </div>
+    </form>
+
+    <section class="rounded-lg border bg-card" aria-labelledby="all-vouchers-heading">
+      <div class="space-y-3 border-b px-4 py-3">
+        <h3 id="all-vouchers-heading" class="font-semibold">All Vouchers</h3>
+        <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,16rem)_minmax(0,10rem)] md:items-end">
+          <form
+            class="min-w-0"
+            role="search"
+            onsubmit={(event) => {
+              event.preventDefault();
+              applyVoucherSearch();
+            }}
+          >
+            <label class="mb-1.5 block text-xs font-medium text-muted-foreground" for="voucher-code-search"
+              >Code search</label
+            >
+            <div class="flex gap-2">
+              <div class="relative min-w-0 flex-1">
+                <SearchIcon
+                  class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <Input
+                  id="voucher-code-search"
+                  class="pl-8"
+                  placeholder="Any part of a code"
+                  autocomplete="off"
+                  bind:value={codeSearchInput}
+                />
+              </div>
+              <Button type="submit" variant="outline">Search</Button>
+              {#if codeSearch}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onclick={() => {
+                    codeSearchInput = "";
+                    codeSearch = "";
+                    voucherOffset = 0;
+                    load();
+                  }}>Clear</Button
+                >
               {/if}
             </div>
-            <input
-              id="voucher-points"
-              type="text"
-              inputmode="decimal"
-              placeholder="e.g. 1.50"
-              class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
-              value={pointsValue}
-              oninput={(event) => {
-                voucherPointsAuto = false;
-                pointsValue = event.currentTarget.value;
-              }}
-            />
-            {#if !economySettings}
-              <p class="mt-1 text-xs text-destructive">Auto points unavailable; enter a custom value.</p>
-            {/if}
-          </div>
-        </div>
-      </div>
-
-
-      <button
-        class="mt-6 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-        type="button"
-        disabled={createBusy}
-        onclick={createVoucher}
-      >
-        {createBusy ? "Creating…" : "Create Voucher"}
-      </button>
-    </div>
-
-    <div class="rounded-lg border bg-card">
-      <div class="space-y-3 border-b px-4 py-3">
-        <h3 class="font-semibold">All Vouchers</h3>
-        <div class="grid gap-3 sm:grid-cols-3">
-          <div>
-            <label class="block text-sm font-medium" for="voucher-batch-filter"
+          </form>
+          <div class="min-w-0">
+            <label class="mb-1.5 block text-xs font-medium text-muted-foreground" for="voucher-batch-filter"
               >Batch</label
             >
             <select
               id="voucher-batch-filter"
-              class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
+              class={SELECT_CLASS}
               bind:value={selectedBatchId}
               onchange={async () => {
                 voucherOffset = 0;
                 await load();
               }}
             >
-              <option value="">All batches and single vouchers</option>
+              <option value="">All vouchers</option>
               {#each batches as batch (batch.id)}
                 <option value={batch.id}
                   >{batch.name} · {batch.prefix} · {formatDate(
@@ -797,13 +1023,13 @@
               {/each}
             </select>
           </div>
-          <div>
-            <label class="block text-sm font-medium" for="voucher-status-filter"
+          <div class="min-w-0">
+            <label class="mb-1.5 block text-xs font-medium text-muted-foreground" for="voucher-status-filter"
               >Status</label
             >
             <select
               id="voucher-status-filter"
-              class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm"
+              class={SELECT_CLASS}
               bind:value={voucherStatus}
               onchange={async () => {
                 voucherOffset = 0;
@@ -816,196 +1042,163 @@
               <option value="all">All</option>
             </select>
           </div>
-          <form
-            onsubmit={(event) => {
-              event.preventDefault();
-              applyVoucherSearch();
-            }}
-          >
-            <label class="block text-sm font-medium" for="voucher-code-search"
-              >Code search</label
-            >
-            <div class="mt-1 flex gap-2">
-              <input
-                id="voucher-code-search"
-                class="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm"
-                placeholder="Type any code fragment"
-                bind:value={codeSearchInput}
-              />
-              <button
-                type="submit"
-                class="rounded-md border px-3 py-2 text-sm hover:bg-accent"
-                >Search</button
-              >
-              {#if codeSearch}
-                <button
-                  type="button"
-                  class="rounded-md border px-3 py-2 text-sm hover:bg-accent"
-                  onclick={() => {
-                    codeSearchInput = "";
-                    codeSearch = "";
-                    voucherOffset = 0;
-                    load();
-                  }}>Clear</button
-                >
-              {/if}
-            </div>
-          </form>
         </div>
         {#if selectedBatchId}
-          <div class="flex items-center justify-between gap-3 border-t pt-3">
-            <p class="text-xs text-muted-foreground">
-              Voids all active vouchers in the selected batch; redeemed cards remain history.
+          <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed px-3 py-2">
+            <p class="min-w-0 text-xs text-muted-foreground">
+              Voiding this batch stops every active card in it; redeemed cards stay as history.
             </p>
-            <button
+            <Button
               type="button"
-              class="shrink-0 rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground disabled:opacity-50"
-              disabled={busy}
-              onclick={voidSelectedBatch}>Void batch</button
+              variant="destructive"
+              size="sm"
+              class="max-md:w-full"
+              disabled={busy || voidBusy}
+              onclick={askVoidSelectedBatch}
             >
+              <BanIcon aria-hidden="true" />
+              Void batch
+            </Button>
           </div>
         {/if}
       </div>
       {#if busy}
-        <div class="p-4 text-center text-sm text-muted-foreground">
-          Loading…
-        </div>
+        <p class="px-4 py-10 text-center text-sm text-muted-foreground" role="status">
+          Loading vouchers…
+        </p>
       {:else if voucherListError}
-        <div class="p-4 text-sm text-destructive">{voucherListError}</div>
+        <div class="p-4">
+          <LoadErrorNotice
+            message="Vouchers could not be loaded"
+            detail={voucherListError}
+            onRetry={load}
+          />
+        </div>
       {:else if vouchers.length === 0}
-        <div class="p-4 text-center text-sm text-muted-foreground">
-          No vouchers yet.
+        <div class="flex flex-col items-center gap-2 px-6 py-12 text-center">
+          <span class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+            <TicketIcon class="size-5" aria-hidden="true" />
+          </span>
+          {#if filtersActive}
+            <p class="font-medium">No vouchers match these filters</p>
+            <p class="max-w-sm text-sm text-muted-foreground">
+              Try another code, batch, or status.
+            </p>
+            <Button variant="outline" class="mt-2" onclick={clearVoucherFilters}>Clear filters</Button>
+          {:else}
+            <p class="font-medium">No active vouchers</p>
+            <p class="max-w-sm text-sm text-muted-foreground">
+              Create one above, or generate a Voucher Batch on the Batches tab for printed cards.
+            </p>
+          {/if}
         </div>
       {:else}
-        <div class="overflow-x-hidden md:overflow-x-auto">
-          <table class="w-full table-fixed text-sm md:table-auto">
+        <div class="md:overflow-x-auto">
+          <table class="w-full text-sm">
+            <caption class="sr-only">Vouchers</caption>
             <thead class="max-md:hidden">
-              <tr class="border-b text-left text-muted-foreground">
-                <th class="px-4 py-3 font-medium">Code</th>
-                <th class="px-4 py-3 font-medium">Batch</th>
-                <th class="px-4 py-3 font-medium">Kind</th>
-                <th class="px-4 py-3 font-medium">Status</th>
-                <th class="px-4 py-3 font-medium">Value</th>
-                <th class="px-4 py-3 font-medium">Created</th>
-                <th class="px-4 py-3 font-medium">Redeemed</th>
-                <th class="px-4 py-3 font-medium">Action</th>
+              <tr class="border-b text-left text-xs text-muted-foreground">
+                <th scope="col" class="px-4 py-2 font-medium">Code</th>
+                <th scope="col" class="px-3 py-2 font-medium">Kind</th>
+                <th scope="col" class="px-3 py-2 font-medium">Status</th>
+                <th scope="col" class="px-3 py-2 font-medium">Value</th>
+                <th scope="col" class="px-3 py-2 font-medium">Created</th>
+                <th scope="col" class="px-3 py-2 font-medium">Redeemed</th>
+                <th scope="col" class="px-4 py-2 text-right font-medium"><span class="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody class="divide-y">
               <ResponsiveRows rows={vouchers}>
                 {#snippet row(v)}
                   <tr class="hover:bg-muted/50">
-                    <td class="px-4 py-3 font-mono text-xs">{v.code}</td>
-                    <td class="px-4 py-3">
-                      {v.batch_name && v.batch_prefix
-                        ? `${v.batch_name} · ${v.batch_prefix}`
-                        : "—"}
-                    </td>
-                    <td class="px-4 py-3">
-                      <Badge
-                        variant={v.kind === "sold" ? "default" : "secondary"}
-                      >
-                        {v.kind}
-                      </Badge>
-                    </td>
-                    <td class="px-4 py-3">{v.status}</td>
-                    <td class="px-4 py-3">
-                      {formatDuration(v.seconds_value)}
+                    <th scope="row" class="px-4 py-2.5 text-left font-normal">
+                      <span class="block font-mono text-sm font-medium whitespace-nowrap">{v.code}</span>
+                      <span class="block text-xs text-muted-foreground">{batchLabel(v)}</span>
+                    </th>
+                    <td class="px-3 py-2.5">{@render kindText(v.kind)}</td>
+                    <td class="px-3 py-2.5">{@render statusBadge(v.status)}</td>
+                    <td class="px-3 py-2.5 tabular-nums">
+                      <span class="block font-mono whitespace-nowrap">{formatDuration(v.seconds_value)}</span>
                       {#if v.points_value_centi > 0}
-                        · +{formatPoints(v.points_value_centi)} pts
+                        <span class="block text-xs whitespace-nowrap text-muted-foreground">+{formatPoints(v.points_value_centi)} pts</span>
                       {/if}
                     </td>
-                    <td class="px-4 py-3 text-muted-foreground"
-                      >{formatDate(v.created_at)}</td
-                    >
-                    <td class="px-4 py-3 text-muted-foreground">
-                      {v.redeemed_at ? formatDate(v.redeemed_at) : "—"}
+                    <td class="px-3 py-2.5 whitespace-nowrap text-muted-foreground tabular-nums">
+                      {formatDate(v.created_at)}
                     </td>
-                    <td class="px-4 py-3">
-                      {#if v.status === "active"}
-                        <button
-                          type="button"
-                          class="rounded-md border border-destructive px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                          disabled={busy}
-                          onclick={() => voidVoucher(v)}>Void</button
-                        >
+                    <td class="px-3 py-2.5 tabular-nums">
+                      {#if v.redeemed_at}
+                        <span class="block whitespace-nowrap">{formatDate(v.redeemed_at)}</span>
+                        {#if v.redeemed_by_username}
+                          <span class="block text-xs text-muted-foreground">by {v.redeemed_by_username}</span>
+                        {/if}
                       {:else}
-                        <span class="text-xs text-muted-foreground">—</span>
+                        <span class="text-muted-foreground" aria-hidden="true">—</span>
+                        <span class="sr-only">Not redeemed</span>
+                      {/if}
+                    </td>
+                    <td class="px-4 py-2.5 text-right">
+                      {#if v.status === "active"}
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          aria-label="Void {v.code}"
+                          disabled={busy || voidBusy}
+                          onclick={() => (voidTarget = { kind: "voucher", voucher: v })}>Void</Button
+                        >
                       {/if}
                     </td>
                   </tr>
                 {/snippet}
                 {#snippet card(v)}
                   <tr>
-                    <td colspan="8" class="p-2">
-                      <article
-                        class="rounded-md border bg-muted/30 p-4"
-                        aria-label={`Voucher ${v.code}`}
-                      >
+                    <td colspan="7" class="px-4 py-3">
+                      <article aria-label={`Voucher ${v.code}`}>
                         <div class="flex items-start justify-between gap-3">
                           <div class="min-w-0">
-                            <h4 class="font-mono text-xs font-semibold break-all">
-                              {v.code}
-                            </h4>
-                            <div class="mt-1 flex flex-wrap items-center gap-2">
-                              <Badge
-                                variant={v.kind === "sold" ? "default" : "secondary"}
-                              >
-                                {v.kind}
-                              </Badge>
-                              <span class="text-xs text-muted-foreground"
-                                >{v.status}</span
-                              >
-                            </div>
+                            <h4 class="font-mono text-sm font-semibold break-all">{v.code}</h4>
+                            <p class="mt-0.5 text-xs text-muted-foreground">{batchLabel(v)}</p>
                           </div>
-                          {#if v.status === "active"}
-                            <button
-                              type="button"
-                              class="shrink-0 rounded-md border border-destructive px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                              disabled={busy}
-                              onclick={() => voidVoucher(v)}>Void</button
-                            >
-                          {/if}
+                          {@render statusBadge(v.status)}
                         </div>
-                        <dl class="mt-4 grid gap-3 sm:grid-cols-2">
+                        <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
                           <div>
-                            <dt class="text-xs text-muted-foreground"
-                              >Batch</dt
-                            >
-                            <dd class="mt-1">
-                              {v.batch_name && v.batch_prefix
-                                ? `${v.batch_name} · ${v.batch_prefix}`
-                                : "—"}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt class="text-xs text-muted-foreground"
-                              >Value</dt
-                            >
-                            <dd class="mt-1">
-                              {formatDuration(v.seconds_value)}
+                            <dt class="text-xs text-muted-foreground">Value</dt>
+                            <dd class="tabular-nums">
+                              <span class="font-mono">{formatDuration(v.seconds_value)}</span>
                               {#if v.points_value_centi > 0}
-                                · +{formatPoints(v.points_value_centi)} pts
+                                <span class="text-muted-foreground">· +{formatPoints(v.points_value_centi)} pts</span>
                               {/if}
                             </dd>
                           </div>
                           <div>
-                            <dt class="text-xs text-muted-foreground"
-                              >Created</dt
-                            >
-                            <dd class="mt-1 text-muted-foreground"
-                              >{formatDate(v.created_at)}</dd
-                            >
+                            <dt class="text-xs text-muted-foreground">Kind</dt>
+                            <dd>{@render kindText(v.kind)}</dd>
                           </div>
                           <div>
-                            <dt class="text-xs text-muted-foreground"
-                              >Redeemed</dt
-                            >
-                            <dd class="mt-1 text-muted-foreground">
-                              {v.redeemed_at ? formatDate(v.redeemed_at) : "—"}
+                            <dt class="text-xs text-muted-foreground">Created</dt>
+                            <dd class="tabular-nums">{formatDate(v.created_at)}</dd>
+                          </div>
+                          <div>
+                            <dt class="text-xs text-muted-foreground">Redeemed</dt>
+                            <dd class="tabular-nums break-words">
+                              {#if v.redeemed_at}
+                                {formatDate(v.redeemed_at)}{v.redeemed_by_username ? ` by ${v.redeemed_by_username}` : ""}
+                              {:else}
+                                <span class="text-muted-foreground">Not yet</span>
+                              {/if}
                             </dd>
                           </div>
                         </dl>
+                        {#if v.status === "active"}
+                          <Button
+                            variant="destructive"
+                            class="mt-3 w-full"
+                            aria-label="Void {v.code}"
+                            disabled={busy || voidBusy}
+                            onclick={() => (voidTarget = { kind: "voucher", voucher: v })}>Void</Button
+                          >
+                        {/if}
                       </article>
                     </td>
                   </tr>
@@ -1014,409 +1207,618 @@
             </tbody>
           </table>
         </div>
-        <div class="flex items-center justify-between border-t px-4 py-3 text-sm">
-          <span class="text-muted-foreground">Showing {voucherOffset + 1}–{voucherOffset + vouchers.length}</span>
-          <div class="flex gap-2">
-            <button
-              type="button"
-              class="rounded-md border px-3 py-1.5 hover:bg-accent disabled:opacity-50"
-              disabled={voucherOffset === 0}
-              onclick={async () => {
-                voucherOffset = Math.max(0, voucherOffset - VOUCHER_PAGE_SIZE);
-                await load();
-              }}>Previous</button
-            >
-            <button
-              type="button"
-              class="rounded-md border px-3 py-1.5 hover:bg-accent disabled:opacity-50"
-              disabled={!hasMoreVouchers}
-              onclick={async () => {
-                voucherOffset += VOUCHER_PAGE_SIZE;
-                await load();
-              }}>Next</button
-            >
-          </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm">
+          <span class="text-muted-foreground tabular-nums">Showing {voucherOffset + 1}–{voucherOffset + vouchers.length}</span>
+          {#if voucherOffset > 0 || hasMoreVouchers}
+            <div class="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={voucherOffset === 0}
+                onclick={async () => {
+                  voucherOffset = Math.max(0, voucherOffset - VOUCHER_PAGE_SIZE);
+                  await load();
+                }}>Previous</Button
+              >
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!hasMoreVouchers}
+                onclick={async () => {
+                  voucherOffset += VOUCHER_PAGE_SIZE;
+                  await load();
+                }}>Next</Button
+              >
+            </div>
+          {/if}
         </div>
       {/if}
-    </div>
+    </section>
   {:else if tab === "batches"}
-    <div
-      class="grid gap-6 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(28rem,1.2fr)]"
+    <form
+      class="rounded-lg border bg-card"
+      aria-labelledby="generate-batch-heading"
+      onsubmit={(event) => {
+        event.preventDefault();
+        createBatch();
+      }}
     >
-      <div class="space-y-6">
-        <form
-          class="rounded-lg border bg-card p-6"
-          onsubmit={(event) => {
-            event.preventDefault();
-            createBatch();
-          }}
-        >
-          <h3 class="mb-4 text-lg font-semibold">Generate Batch</h3>
-          <div class="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label class="text-sm font-medium" for="batch-prefix"
-                >Prefix</label
-              >
-              <input
-                id="batch-prefix"
-                required
-                minlength="2"
-                maxlength="8"
-                pattern="[A-Za-z0-9]+"
-                class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm uppercase"
-                bind:value={prefix}
-              />
-            </div>
-            <div>
-              <label class="text-sm font-medium" for="batch-suffix"
-                >Suffix length</label
-              >
-              <input
-                id="batch-suffix"
-                required
-                min="6"
-                max="16"
-                type="number"
-                class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                bind:value={suffixLength}
-              />
-            </div>
-            <div>
-              <label class="text-sm font-medium" for="batch-count">Count</label>
-              <input
-                id="batch-count"
-                required
-                min="1"
-                max="1000"
-                type="number"
-                class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                bind:value={count}
-              />
-            </div>
-            <div class="sm:col-span-2">
-              <span class="text-sm font-medium">Time (DD:HH:mm:ss)</span>
-              <div class="mt-1 grid grid-cols-4 gap-2">
-                <label class="text-xs text-muted-foreground">Days
-                  <input min="0" max="99" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={batchDays} />
-                </label>
-                <label class="text-xs text-muted-foreground">Hours
-                  <input min="0" max="23" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={batchHours} />
-                </label>
-                <label class="text-xs text-muted-foreground">Minutes
-                  <input min="0" max="59" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={batchMinutes} />
-                </label>
-                <label class="text-xs text-muted-foreground">Seconds
-                  <input min="0" max="59" type="number" class="mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm" bind:value={batchSeconds} />
-                </label>
-              </div>
-            </div>
-            <div>
-              <label class="text-sm font-medium" for="batch-cash"
-                >Cash amount (pesos/card)</label
-              >
-              <input
-                id="batch-cash"
-                required
-                type="text"
-                inputmode="decimal"
-                placeholder="0.00"
-                class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                value={batchCashAmountPesos}
-                oninput={(event) => {
-                  batchCashAmountPesos = event.currentTarget.value;
-                  refreshBatchAutoPoints();
-                }}
-              />
-              <p class="mt-1 text-xs text-muted-foreground">
-                {parsePesosToCents(batchCashAmountPesos) === null
-                  ? "Enter a non-negative peso amount"
-                  : parsePesosToCents(batchCashAmountPesos)! > 0
-                    ? `Sold · ${formatMoney(parsePesosToCents(batchCashAmountPesos)!)}`
-                    : "Promo"}
-              </p>
-            </div>
-            <div>
-              <div class="flex items-center justify-between gap-2">
-                <label class="text-sm font-medium" for="batch-points"
-                  >Points</label
-                >
-                {#if batchPointsAuto}
-                  <span class="text-xs text-muted-foreground">Auto</span>
-                {:else if economySettings}
-                  <button type="button" class="text-xs text-primary hover:underline" onclick={() => {
-                    batchPointsAuto = true;
-                    refreshBatchAutoPoints();
-                  }}>Reset to auto</button>
-                {:else}
-                  <span class="text-xs text-muted-foreground">Custom</span>
-                {/if}
-              </div>
-              <input
-                id="batch-points"
-                required
-                inputmode="decimal"
-                class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                value={batchPoints}
-                oninput={(event) => {
-                  batchPointsAuto = false;
-                  batchPoints = event.currentTarget.value;
-                }}
-              />
-              {#if !economySettings}
-                <p class="mt-1 text-xs text-destructive">Auto points unavailable; enter a custom value.</p>
-              {/if}
-            </div>
-            <div class="sm:col-span-2">
-              <label class="text-sm font-medium" for="batch-expiry"
-                >Expiry (optional)</label
-              >
-              <input
-                id="batch-expiry"
-                type="datetime-local"
-                class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                bind:value={expiresAt}
-              />
-            </div>
-          </div>
-          <button
-            class="mt-5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-            disabled={batchBusy}
-          >
-            {batchBusy ? "Working…" : "Generate Batch"}
-          </button>
-        </form>
-
-        <div class="rounded-lg border bg-card">
-          <div class="border-b px-4 py-3 font-semibold">Batches</div>
-          {#if busy}
-            <div class="p-4 text-sm text-muted-foreground">Loading…</div>
-          {:else if batchListError}
-            <div class="p-4 text-sm text-destructive">{batchListError}</div>
-          {:else if batches.length === 0}
-            <div class="p-4 text-sm text-muted-foreground">No batches yet.</div>
-          {:else}
-            <div class="divide-y">
-              {#each batches as batch (batch.id)}
-                <button
-                  type="button"
-                  class="block w-full p-4 text-left hover:bg-muted/50"
-                  onclick={() => openBatch(batch.id)}
-                >
-                  <div class="flex justify-between gap-4">
-                    <strong>{batch.name}</strong>
-                    <span>{batch.redeemed_count}/{batch.count} redeemed</span>
-                  </div>
-                  <div class="mt-1 text-xs text-muted-foreground">
-                    {batch.prefix} · {formatDayDuration(
-                      batch.seconds_value,
-                    )} · {formatPoints(
-                      batch.points_value_centi,
-                    )} pts ·
-                    {batch.kind === "sold"
-                      ? formatMoney(batch.cash_amount_cents)
-                      : "Promo"} ·
-                    {formatDate(batch.created_at)}{batch.voided_at
-                      ? " · Voided"
-                      : ""}
-                  </div>
-                </button>
-              {/each}
-            </div>
-            {#if hasMoreBatches}
+      <div class="border-b px-4 py-3">
+        <h3 id="generate-batch-heading" class="font-semibold">Generate Batch</h3>
+        <p class="text-sm text-muted-foreground">
+          Up to 1,000 Vouchers with the same value, ready to print or export.
+        </p>
+      </div>
+      <div class="grid gap-x-4 gap-y-5 p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="batch-prefix">Prefix</label>
+          <Input
+            id="batch-prefix"
+            required
+            minlength={2}
+            maxlength={8}
+            pattern="[A-Za-z0-9]+"
+            autocomplete="off"
+            placeholder="e.g. REG"
+            class="uppercase placeholder:normal-case"
+            aria-describedby="batch-prefix-hint"
+            bind:value={prefix}
+          />
+          <p id="batch-prefix-hint" class="mt-1.5 text-xs text-muted-foreground">2–8 letters or numbers</p>
+        </div>
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="batch-suffix">Suffix length</label>
+          <Input
+            id="batch-suffix"
+            required
+            min="6"
+            max="16"
+            type="number"
+            inputmode="numeric"
+            class="tabular-nums"
+            aria-describedby="batch-suffix-hint"
+            bind:value={suffixLength}
+          />
+          <p id="batch-suffix-hint" class="mt-1.5 text-xs text-muted-foreground">6–16 random characters</p>
+        </div>
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="batch-count">Count</label>
+          <Input
+            id="batch-count"
+            required
+            min="1"
+            max="1000"
+            type="number"
+            inputmode="numeric"
+            class="tabular-nums"
+            aria-describedby="batch-count-hint"
+            bind:value={count}
+          />
+          <p id="batch-count-hint" class="mt-1.5 text-xs text-muted-foreground">1–1,000 cards</p>
+        </div>
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="batch-expiry">Expiry</label>
+          <Input
+            id="batch-expiry"
+            type="datetime-local"
+            class="dark:scheme-dark"
+            aria-describedby="batch-expiry-hint"
+            bind:value={expiresAt}
+          />
+          <p id="batch-expiry-hint" class="mt-1.5 text-xs text-muted-foreground">Optional; leave empty for no expiry</p>
+        </div>
+        <DurationFields
+          idPrefix="batch-time"
+          class="sm:col-span-2"
+          bind:days={batchDays}
+          bind:hours={batchHours}
+          bind:minutes={batchMinutes}
+          bind:seconds={batchSeconds}
+        />
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="batch-cash">Cash per card (₱)</label>
+          <Input
+            id="batch-cash"
+            required
+            type="text"
+            inputmode="decimal"
+            placeholder="0.00"
+            class="tabular-nums"
+            aria-describedby="batch-cash-hint"
+            aria-invalid={batchCashKind === null ? true : undefined}
+            value={batchCashAmountPesos}
+            oninput={(event: Event & { currentTarget: HTMLInputElement }) => {
+              batchCashAmountPesos = event.currentTarget.value;
+              refreshBatchAutoPoints();
+            }}
+          />
+          {@render cashHint("batch-cash-hint", batchCashKind, true)}
+        </div>
+        <div class="min-w-0">
+          <label class="mb-1.5 block text-sm font-medium" for="batch-points">Points</label>
+          <Input
+            id="batch-points"
+            required
+            inputmode="decimal"
+            class="tabular-nums"
+            aria-describedby="batch-points-hint"
+            value={batchPoints}
+            oninput={(event: Event & { currentTarget: HTMLInputElement }) => {
+              batchPointsAuto = false;
+              batchPoints = event.currentTarget.value;
+            }}
+          />
+          <p id="batch-points-hint" class="mt-1.5 text-xs {economySettings ? 'text-muted-foreground' : 'text-destructive'}">
+            {#if batchPointsAuto}
+              Auto from the earn rate
+            {:else if economySettings}
+              Custom value ·
               <button
                 type="button"
-                class="w-full border-t px-4 py-3 text-sm hover:bg-muted/50 disabled:opacity-50"
+                class="font-medium text-primary underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+                onclick={() => {
+                  batchPointsAuto = true;
+                  refreshBatchAutoPoints();
+                }}>Reset to auto</button
+              >
+            {:else}
+              Auto points unavailable; enter a custom value.
+            {/if}
+          </p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center justify-end gap-3 border-t px-4 py-3">
+        <Button type="submit" class="max-md:w-full" disabled={batchBusy}>
+          {batchBusy ? "Working…" : "Generate Batch"}
+        </Button>
+      </div>
+    </form>
+
+    <div
+      class="grid items-start gap-6 {detail || batches.length > 0
+        ? 'xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]'
+        : ''}"
+    >
+      <section class="min-w-0 rounded-lg border bg-card" aria-labelledby="batches-heading">
+        <div class="flex items-baseline justify-between gap-3 border-b px-4 py-3">
+          <h3 id="batches-heading" class="font-semibold">Batches</h3>
+          {#if batches.length > 0}
+            <p class="text-xs text-muted-foreground tabular-nums">{batches.length} shown</p>
+          {/if}
+        </div>
+        {#if busy}
+          <p class="px-4 py-10 text-center text-sm text-muted-foreground" role="status">Loading batches…</p>
+        {:else if batchListError}
+          <div class="p-4">
+            <LoadErrorNotice
+              message="Voucher Batches could not be loaded"
+              detail={batchListError}
+              onRetry={load}
+            />
+          </div>
+        {:else if batches.length === 0}
+          <div class="flex flex-col items-center gap-2 px-6 py-12 text-center">
+            <span class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+              <LayersIcon class="size-5" aria-hidden="true" />
+            </span>
+            <p class="font-medium">No batches yet</p>
+            <p class="max-w-sm text-sm text-muted-foreground">
+              Generate one above to print a sheet of Voucher cards or export them as CSV.
+            </p>
+          </div>
+        {:else}
+          <ul class="divide-y">
+            {#each batches as batch (batch.id)}
+              {@const selected = detail?.id === batch.id}
+              <li>
+                <button
+                  type="button"
+                  aria-current={selected ? "true" : undefined}
+                  class="block w-full px-4 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset {selected
+                    ? 'bg-muted/60 shadow-[inset_3px_0_0_var(--color-primary)]'
+                    : ''}"
+                  onclick={() => selectBatch(batch.id)}
+                >
+                  <span class="flex items-baseline justify-between gap-3">
+                    <span class="min-w-0 truncate font-medium">{batch.name}</span>{" "}
+                    <span class="shrink-0 text-sm text-muted-foreground tabular-nums"
+                      ><span class="font-medium text-foreground">{batch.redeemed_count}</span>/{batch.count} redeemed</span
+                    >
+                  </span>
+                  <span class="mt-2 block">{@render progress(batch)}</span>
+                  <span class="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground tabular-nums">
+                    <span class="font-mono text-foreground">{batch.prefix}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatProseDuration(batch.seconds_value)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatPoints(batch.points_value_centi)} pts</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{batch.kind === "sold" ? formatMoney(batch.cash_amount_cents) : "Promo"}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatDate(batch.created_at)}</span>
+                    {#if batch.voided_at}
+                      {@render statusBadge("voided")}
+                    {/if}
+                  </span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+          {#if hasMoreBatches}
+            <div class="border-t p-3">
+              <Button
+                variant="ghost"
+                class="w-full"
                 disabled={loadingMoreBatches}
                 onclick={loadMoreBatches}
               >
                 {loadingMoreBatches ? "Loading…" : "Load older batches"}
-              </button>
-            {/if}
+              </Button>
+            </div>
           {/if}
-        </div>
-      </div>
+        {/if}
+      </section>
 
-      <div class="rounded-lg border bg-card">
-        {#if !detail}
-          <div class="p-8 text-center text-sm text-muted-foreground">
-            Select a batch to view its cards.
-          </div>
-        {:else}
-          <div
-            class="flex flex-wrap items-start justify-between gap-4 border-b p-4"
-          >
-            <div>
-              <h3 class="text-lg font-semibold">{detail.name} batch</h3>
-              <p class="text-sm text-muted-foreground">
-                {detail.prefix} · {detail.redeemed_count}/{detail.count} redeemed ·
-                {detail.kind} · {formatDayDuration(detail.seconds_value)} · created
-                {formatDate(detail.created_at)}
+      {#if detail || batches.length > 0}
+        <section
+          class="min-w-0 rounded-lg border bg-card"
+          aria-labelledby={detail ? "voucher-batch-detail-heading" : undefined}
+          aria-label={detail ? undefined : "Batch detail"}
+        >
+          {#if !detail}
+            <div class="flex flex-col items-center gap-2 px-6 py-12 text-center">
+              <span class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                <PrinterIcon class="size-5" aria-hidden="true" />
+              </span>
+              <p class="font-medium">No batch selected</p>
+              <p class="max-w-sm text-sm text-muted-foreground">
+                Choose a batch to see its cards, print them, or export a CSV.
               </p>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <button
-                type="button"
-                class="rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
-                disabled={batchBusy}
-                onclick={printBatch}>Print</button
-              >
-              <button
-                type="button"
-                class="rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
-                disabled={batchBusy}
-                onclick={exportBatch}>Export CSV</button
-              >
-              {#if !detail.voided_at}
-                <button
-                  type="button"
-                  class="rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground disabled:opacity-50"
-                  disabled={batchBusy}
-                  onclick={voidBatch}>Void batch</button
+          {:else}
+            <div class="space-y-4 border-b p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <h3
+                    id="voucher-batch-detail-heading"
+                    bind:this={detailHeading}
+                    tabindex="-1"
+                    class="text-lg font-semibold outline-none max-md:break-words"
+                  >
+                    {detail.name} batch
+                  </h3>
+                  <p class="text-sm text-muted-foreground">
+                    <span class="font-mono">{detail.prefix}</span> · created {formatDate(detail.created_at)}
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2 max-md:w-full">
+                  <Button variant="outline" class="max-md:flex-1" disabled={batchBusy} onclick={printBatch}>
+                    <PrinterIcon aria-hidden="true" />
+                    Print
+                  </Button>
+                  <Button variant="outline" class="max-md:flex-1" disabled={batchBusy} onclick={exportBatch}>
+                    <DownloadIcon aria-hidden="true" />
+                    Export CSV
+                  </Button>
+                  {#if !detail.voided_at}
+                    <Button
+                      variant="destructive"
+                      class="max-md:flex-1"
+                      disabled={batchBusy || voidBusy}
+                      onclick={() => {
+                        if (detail)
+                          voidTarget = { kind: "batch", id: detail.id, name: detail.name, prefix: detail.prefix };
+                      }}
+                    >
+                      <BanIcon aria-hidden="true" />
+                      Void batch
+                    </Button>
+                  {/if}
+                </div>
+              </div>
+              <dl class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div class="rounded-md bg-muted/60 px-3 py-2.5">
+                  <dt class="text-xs text-muted-foreground">Redeemed</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">{detail.redeemed_count} / {detail.count}</dd>
+                  <dd class="mt-1.5">{@render progress(detail)}</dd>
+                </div>
+                <div class="rounded-md bg-muted/60 px-3 py-2.5">
+                  <dt class="text-xs text-muted-foreground">Time per card</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">{formatProseDuration(detail.seconds_value)}</dd>
+                  <dd class="text-xs text-muted-foreground tabular-nums">{formatPoints(detail.points_value_centi)} pts</dd>
+                </div>
+                <div class="rounded-md bg-muted/60 px-3 py-2.5">
+                  <dt class="text-xs text-muted-foreground">Price per card</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">
+                    {detail.kind === "sold" ? formatMoney(detail.cash_amount_cents) : "Promo"}
+                  </dd>
+                  <dd class="text-xs text-muted-foreground">{detail.kind === "sold" ? "Sold" : "No cash collected"}</dd>
+                </div>
+                <div class="rounded-md bg-muted/60 px-3 py-2.5">
+                  <dt class="text-xs text-muted-foreground">Expires</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">
+                    {detail.expires_at ? formatDateShort(detail.expires_at) : "Never"}
+                  </dd>
+                </div>
+              </dl>
+              {#if detail.voided_at}
+                <p
+                  class="flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  role="status"
                 >
+                  <BanIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  <span>Voided {formatDate(detail.voided_at)}. Redeemed cards remain valid history.</span>
+                </p>
               {/if}
             </div>
-          </div>
-          {#if detail.voided_at}
-            <div
-              class="m-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive"
-            >
-              Voided {formatDate(detail.voided_at)}. Redeemed cards remain valid
-              history.
+            <div class="max-h-[42rem] overflow-y-auto md:overflow-x-auto">
+              <table class="w-full text-sm">
+                <caption class="sr-only">Vouchers in the {detail.name} batch</caption>
+                <thead class="sticky top-0 z-10 bg-card max-md:hidden">
+                  <tr class="border-b text-left text-xs text-muted-foreground">
+                    <th scope="col" class="px-4 py-2 font-medium">Code</th>
+                    <th scope="col" class="px-3 py-2 font-medium">Status</th>
+                    <th scope="col" class="px-3 py-2 font-medium">Redeemed by</th>
+                    <th scope="col" class="px-4 py-2 font-medium">Redeemed</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y">
+                  <ResponsiveRows rows={detail.vouchers}>
+                    {#snippet row(v)}
+                      <tr class="hover:bg-muted/50">
+                        <th scope="row" class="px-4 py-2.5 text-left font-mono text-sm font-medium whitespace-nowrap">{v.code}</th>
+                        <td class="px-3 py-2.5">{@render statusBadge(v.status)}</td>
+                        <td class="px-3 py-2.5 break-words">
+                          {#if v.redeemed_by_username}
+                            {v.redeemed_by_username}
+                          {:else}
+                            <span class="text-muted-foreground" aria-hidden="true">—</span>
+                            <span class="sr-only">No one</span>
+                          {/if}
+                        </td>
+                        <td class="px-4 py-2.5 whitespace-nowrap text-muted-foreground tabular-nums">
+                          {#if v.redeemed_at}
+                            {formatDate(v.redeemed_at)}
+                          {:else}
+                            <span aria-hidden="true">—</span>
+                            <span class="sr-only">Not redeemed</span>
+                          {/if}
+                        </td>
+                      </tr>
+                    {/snippet}
+                    {#snippet card(v)}
+                      <tr>
+                        <td colspan="4" class="px-4 py-3">
+                          <article aria-label={`Voucher ${v.code}`}>
+                            <div class="flex items-start justify-between gap-3">
+                              <h4 class="min-w-0 font-mono text-sm font-semibold break-all">{v.code}</h4>
+                              {@render statusBadge(v.status)}
+                            </div>
+                            {#if v.redeemed_at}
+                              <p class="mt-1 text-xs text-muted-foreground break-words tabular-nums">
+                                Redeemed {formatDate(v.redeemed_at)}{v.redeemed_by_username ? ` by ${v.redeemed_by_username}` : ""}
+                              </p>
+                            {/if}
+                          </article>
+                        </td>
+                      </tr>
+                    {/snippet}
+                  </ResponsiveRows>
+                </tbody>
+              </table>
             </div>
           {/if}
-          <div class="max-h-[42rem] overflow-x-hidden overflow-y-auto md:overflow-x-auto">
-            <table class="w-full table-fixed text-sm md:table-auto">
-              <thead class="sticky top-0 bg-card max-md:hidden">
-                <tr class="border-b text-left text-muted-foreground">
-                  <th class="px-4 py-3">Code</th>
-                  <th class="px-4 py-3">Status</th>
-                  <th class="px-4 py-3">Redeemed by</th>
-                  <th class="px-4 py-3">Redeemed</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y">
-                <ResponsiveRows rows={detail.vouchers}>
-                  {#snippet row(v)}
-                    <tr>
-                      <td class="px-4 py-3 font-mono text-xs">{v.code}</td>
-                      <td class="px-4 py-3">{v.status}</td>
-                      <td class="px-4 py-3">{v.redeemed_by_username ?? "—"}</td
-                      >
-                      <td class="px-4 py-3 text-muted-foreground">
-                        {v.redeemed_at ? formatDate(v.redeemed_at) : "—"}
-                      </td>
-                    </tr>
-                  {/snippet}
-                  {#snippet card(v)}
-                    <tr>
-                      <td colspan="4" class="p-2">
-                        <article
-                          class="rounded-md border bg-muted/30 p-4"
-                          aria-label={`Voucher ${v.code}`}
-                        >
-                          <h4 class="font-mono text-xs font-semibold break-all">
-                            {v.code}
-                          </h4>
-                          <dl class="mt-4 grid gap-3 sm:grid-cols-3">
-                            <div>
-                              <dt class="text-xs text-muted-foreground"
-                                >Status</dt
-                              >
-                              <dd class="mt-1">{v.status}</dd>
-                            </div>
-                            <div>
-                              <dt class="text-xs text-muted-foreground"
-                                >Redeemed by</dt
-                              >
-                              <dd class="mt-1 break-words">{v.redeemed_by_username ?? "—"}</dd>
-                            </div>
-                            <div>
-                              <dt class="text-xs text-muted-foreground"
-                                >Redeemed</dt
-                              >
-                              <dd class="mt-1 text-muted-foreground">
-                                {v.redeemed_at ? formatDate(v.redeemed_at) : "—"}
-                              </dd>
-                            </div>
-                          </dl>
-                        </article>
-                      </td>
-                    </tr>
-                  {/snippet}
-                </ResponsiveRows>
-              </tbody>
-            </table>
-          </div>
-        {/if}
-      </div>
+        </section>
+      {/if}
     </div>
   {:else}
-    <div class="space-y-6">
-      <div class="rounded-lg border bg-card p-6">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h3 class="text-lg font-semibold">Voucher Template</h3>
-            <p class="mt-1 text-sm text-muted-foreground">
-              HTML + CSS repeated once per card. JavaScript is disabled.
-            </p>
-          </div>
-          <div class="flex gap-2">
-            <button
-              type="button"
-              class="rounded-md border px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
-              disabled={templateBusy || !voucherTemplate}
-              onclick={resetTemplate}>Reset to default</button
-            >
-            <button
-              type="button"
-              class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-              disabled={templateBusy || !voucherTemplate}
-              onclick={() => saveTemplate()}
-              >{templateBusy ? "Saving…" : "Save template"}</button
-            >
+    <section class="rounded-lg border bg-card" aria-labelledby="voucher-template-heading">
+      <div class="flex flex-wrap items-start justify-between gap-4 px-4 py-3">
+        <div class="min-w-0 max-w-2xl">
+          <h3 id="voucher-template-heading" class="font-semibold">Voucher Template</h3>
+          <p class="text-sm text-muted-foreground">
+            Card HTML and Template CSS repeat once per card; the optional Template Script runs
+            once per preview or print.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 max-md:w-full">
+          <p class="text-xs font-medium text-amber-700 empty:hidden max-md:w-full dark:text-amber-300" role="status">
+            {templateDirty ? "Unsaved changes" : ""}
+          </p>
+          <Button
+            variant="outline"
+            class="max-md:flex-1"
+            disabled={templateBusy || !voucherTemplate}
+            onclick={resetTemplate}>Reset to default</Button
+          >
+          <Button
+            class="max-md:flex-1"
+            disabled={templateBusy || !voucherTemplate}
+            onclick={() => saveTemplate()}
+            >{templateBusy ? "Saving…" : "Save template"}</Button
+          >
+        </div>
+      </div>
+      <div class="border-t px-4 py-3 text-xs leading-6 text-muted-foreground">
+        <span class="font-medium text-foreground">Tokens</span>
+        {#each ["code", "time", "points", "price", "shop_name", "expires_at", "prefix"] as token (token)}
+          {" "}<code class="rounded-md bg-muted px-1.5 py-0.5 font-mono text-foreground">{`{{${token}}}`}</code>
+        {/each}
+        <span class="block">
+          Put <code class="font-mono text-foreground">@page</code>, grid, and page-break rules in Template CSS.
+        </span>
+      </div>
+    </section>
+
+    <div class="grid items-start gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+      <section data-template-editors class="min-w-0 rounded-lg border bg-card" aria-label="Template editors">
+        <div class="border-b p-2">
+          <div
+            role="tablist"
+            aria-label="Template part"
+            class="flex flex-wrap gap-1 rounded-lg bg-muted p-1"
+          >
+            {#each editorTabs as item (item.key)}
+              <button
+                type="button"
+                role="tab"
+                id="voucher-template-tab-{item.key}"
+                aria-selected={editorTab === item.key}
+                aria-controls="voucher-template-panel-{item.key}"
+                tabindex={editorTab === item.key ? 0 : -1}
+                class="flex-1 rounded-md px-2 py-1.5 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none md:px-3 {editorTab === item.key
+                  ? 'bg-background text-foreground shadow-sm dark:bg-input/50'
+                  : 'text-muted-foreground hover:text-foreground'}"
+                onclick={() => (editorTab = item.key)}
+                onkeydown={(event) =>
+                  tabKeydown(event, editorTabs.map((t) => t.key), editorTab, (key) => (editorTab = key), "voucher-template-tab-")}
+                >{item.label}</button
+              >
+            {/each}
           </div>
         </div>
-        <p class="mt-4 text-xs text-muted-foreground">
-          Tokens: <code>{"{{code}}"}</code>, <code>{"{{time}}"}</code>,
-          <code>{"{{points}}"}</code>, <code>{"{{price}}"}</code>,
-          <code>{"{{shop_name}}"}</code>, <code>{"{{expires_at}}"}</code>,
-          <code>{"{{prefix}}"}</code>. Put <code>@page</code>, grid, and
-          page-break rules in CSS.
+        <!-- All three editors stay mounted so unsaved edits survive tab switches;
+             each tabpanel wraps its textarea so the textarea keeps its textbox role. -->
+        <div
+          id="voucher-template-panel-html"
+          role="tabpanel"
+          aria-labelledby="voucher-template-tab-html"
+          class="p-4"
+          hidden={editorTab !== "html"}
+        >
+          <textarea
+            id="voucher-template-html"
+            aria-label="Card HTML"
+            class={EDITOR_CLASS}
+            spellcheck="false"
+            bind:value={templateHtml}
+          ></textarea>
+        </div>
+        <div
+          id="voucher-template-panel-css"
+          role="tabpanel"
+          aria-labelledby="voucher-template-tab-css"
+          class="p-4"
+          hidden={editorTab !== "css"}
+        >
+          <textarea
+            id="voucher-template-css"
+            aria-label="Template CSS"
+            class={EDITOR_CLASS}
+            spellcheck="false"
+            bind:value={templateCss}
+          ></textarea>
+        </div>
+        <div
+          id="voucher-template-panel-script"
+          role="tabpanel"
+          aria-labelledby="voucher-template-tab-script"
+          class="p-4"
+          hidden={editorTab !== "script"}
+        >
+          <p
+            role="note"
+            class="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100"
+          >
+            <TriangleAlertIcon class="mt-px size-3.5 shrink-0" aria-hidden="true" />
+            <span>A Template Script can send voucher codes off this PC. Only paste code you trust.</span>
+          </p>
+          <textarea
+            id="voucher-template-script"
+            aria-label="Template Script"
+            aria-describedby="voucher-template-script-hint"
+            class={EDITOR_CLASS}
+            spellcheck="false"
+            placeholder="Optional JavaScript. Read card data from the cards, for example data-price=&quot;&#123;&#123;price&#125;&#125;&quot;."
+            bind:value={templateScript}
+          ></textarea>
+          <p id="voucher-template-script-hint" class="mt-1.5 text-xs text-muted-foreground">
+            Run applies it to the preview; print always runs the saved script.
+          </p>
+        </div>
+      </section>
+      <section
+        data-template-preview
+        class="min-w-0 rounded-lg border bg-card xl:sticky xl:top-4"
+        aria-labelledby="voucher-preview-heading"
+      >
+        <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
+          <h3 id="voucher-preview-heading" class="font-semibold">Live Preview</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-describedby="voucher-preview-script-state"
+            onclick={() => (scriptRun = { script: templateScript })}
+          >
+            <PlayIcon aria-hidden="true" />
+            Run
+          </Button>
+        </div>
+        <div class="p-3">
+          <div
+            data-voucher-render="preview"
+            data-render-status={previewStatus}
+            data-render-seq={previewSeq}
+            class="rounded-md bg-neutral-200 p-3 dark:bg-neutral-700"
+          >
+            <iframe
+              bind:this={previewFrame}
+              title="Voucher template live preview"
+              sandbox="allow-scripts allow-modals"
+              style:height={previewHeight === null ? undefined : `${previewHeight}px`}
+              class="w-full"
+            ></iframe>
+            {#if previewMessage}
+              <p
+                role="alert"
+                data-render-error
+                class="mt-3 rounded-md bg-card px-3 py-2 text-sm text-destructive"
+              >
+                {previewMessage}
+              </p>
+            {/if}
+          </div>
+        </div>
+        <p
+          id="voucher-preview-script-state"
+          class="flex flex-wrap items-center gap-x-1.5 border-t px-4 py-2.5 text-xs text-muted-foreground"
+          role="status"
+        >
+          <span>Sample cards at ₱5, ₱20, ₱50 and ₱100.</span>
+          {#if scriptState === "applied"}
+            <span class="font-medium text-foreground">Template Script applied.</span>
+          {:else if scriptState === "stale"}
+            <span class="font-medium text-amber-700 dark:text-amber-300">Template Script changed since the last Run.</span>
+          {:else}
+            <span>Template Script not run; press Run to apply it.</span>
+          {/if}
         </p>
-        <div class="mt-5 grid gap-5 xl:grid-cols-2">
-          <div>
-            <label class="text-sm font-medium" for="voucher-template-html"
-              >Card HTML</label
-            >
-            <textarea
-              id="voucher-template-html"
-              class="mt-1 min-h-80 w-full rounded-md border bg-background p-3 font-mono text-xs"
-              spellcheck="false"
-              bind:value={templateHtml}
-            ></textarea>
-          </div>
-          <div>
-            <label class="text-sm font-medium" for="voucher-template-css"
-              >Template CSS</label
-            >
-            <textarea
-              id="voucher-template-css"
-              class="mt-1 min-h-80 w-full rounded-md border bg-background p-3 font-mono text-xs"
-              spellcheck="false"
-              bind:value={templateCss}
-            ></textarea>
-          </div>
-        </div>
-      </div>
-      <div class="rounded-lg border bg-card p-6">
-        <h3 class="mb-4 text-lg font-semibold">Live Preview</h3>
-        <iframe
-          title="Voucher template live preview"
-          sandbox="allow-same-origin"
-          srcdoc={previewDocument}
-          class="h-[32rem] w-full rounded-md border bg-white"
-        ></iframe>
-      </div>
+      </section>
     </div>
   {/if}
+  </div>
 </div>
+
+{#if voidTarget}
+  <ConfirmDialog
+    title={voidTarget.kind === "voucher"
+      ? `Void voucher ${voidTarget.voucher.code}?`
+      : `Void the ${voidTarget.name} batch?`}
+    confirmLabel={voidTarget.kind === "voucher" ? "Void voucher" : "Void batch"}
+    busyLabel="Voiding…"
+    busy={voidBusy}
+    destructive
+    onconfirm={confirmVoid}
+    oncancel={() => (voidTarget = null)}
+  >
+    {#if voidTarget.kind === "voucher"}
+      The code stops working immediately and stays in history. This cannot be undone.
+      {#if voidTarget.voucher.kind === "sold"}
+        Recorded revenue remains unchanged.
+      {/if}
+    {:else}
+      Every active {voidTarget.prefix} card in this batch stops working immediately; redeemed
+      cards stay as history. This cannot be undone.
+    {/if}
+  </ConfirmDialog>
+{/if}

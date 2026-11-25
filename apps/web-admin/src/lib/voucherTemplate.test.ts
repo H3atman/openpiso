@@ -1,8 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  buildVoucherDocument,
-  substituteVoucherTokens,
-} from "./voucherTemplate";
+import { substituteVoucherTokens } from "./voucherTemplate";
 
 const allValues = {
   code: "SHOP-ABCD-2345",
@@ -44,21 +41,5 @@ describe("substituteVoucherTokens", () => {
     expect(substituteVoucherTokens("{{unknown}}", allValues)).toBe(
       "{{unknown}}",
     );
-  });
-});
-
-describe("buildVoucherDocument", () => {
-  test("removes script tags and disables script execution with CSP", () => {
-    const document = buildVoucherDocument(
-      {
-        html: `<article>{{code}}<script>window.top.hacked = true</script></article>`,
-        css: `article { color: black; }</style><script>window.top.hacked = true</script>`,
-      },
-      [allValues],
-    );
-
-    expect(document).not.toMatch(/<script/i);
-    expect(document).toContain("script-src 'none'");
-    expect(document).toContain("SHOP-ABCD-2345");
   });
 });
