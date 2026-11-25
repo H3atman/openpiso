@@ -721,7 +721,29 @@ rows):
 The server calculates ranges from the admin host's local business date. Weekly
 is Monday through Sunday; Monthly is month-to-date. PC sales are cash revenue
 anchored to that PC, so sold vouchers without a PC remain in the Summary Total
-but are not assigned to a PC.
+but are not assigned to a PC. The Sales Report page uses this call for the four
+fixed cards; its per-PC table reads `reports/pc-sales` below.
+
+`POST /web-admin/reports/pc-sales` returns Coin Sales and Voucher Sales per PC
+for an inclusive range. Body: `{ "from_date": "YYYY-MM-DD", "to_date":
+"YYYY-MM-DD" }`, both required; a reversed or malformed range is refused with
+HTTP 400. Every registered PC appears (zeros when it has no sales), in natural
+name order. Batch-sold voucher cash is counted at the PC where the card was
+redeemed. Cash Revenue with no registered PC (single-mint sold vouchers) is the
+`unassigned` entry, so the PC entries plus `unassigned` add up to the range's
+Cash Revenue from `reports/summary`.
+
+```json
+{
+  "from_date": "2026-08-01",
+  "to_date": "2026-08-31",
+  "pcs": [
+    { "id": "pc-01", "name": "PC 01", "coin_sales_cents": 200, "voucher_sales_cents": 0 },
+    { "id": "pc-02", "name": "PC 02", "coin_sales_cents": 500, "voucher_sales_cents": 500 }
+  ],
+  "unassigned": { "coin_sales_cents": 0, "voucher_sales_cents": 2000 }
+}
+```
 
 `GET /web-admin/cash-on-hand` returns, per kind (`coin_box`,
 `voucher_cash`), the **Uncollected** amount and the last Cash Collection, and is
@@ -1914,6 +1936,7 @@ list, create, download, delete, schedule, or restore Backups.
 | `GET /web-admin/cash-on-hand`                      | –                              | owner-authenticated Uncollected and last collection per kind (ADR-0091)                                                                 |
 | `POST /web-admin/cash-collections`                 | –                              | owner-only Collect; body `{ "kind" }` only, server-computed amount, `409` at ₱0                                                         |
 | `POST /web-admin/reports/summary`                  | `get_report_summary`           |                                                                                                                                        |
+| `POST /web-admin/reports/pc-sales`                 | –                              | ranged per-PC Coin/Voucher Sales plus `unassigned`; owner-authenticated                                                                |
 | `POST /web-admin/reports/attendance`               | –                              | flow range plus independent Earning Month and Account pages; owner-authenticated; current liability is range-independent                 |
 | `POST /web-admin/reports/account`                  | `get_account_report`           |                                                                                                                                        |
 | `POST /web-admin/reports/pc`                       | `get_pc_report`                |                                                                                                                                        |

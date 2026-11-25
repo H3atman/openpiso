@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../api", () => ({
   getSalesReportOverview: vi.fn(),
   getReportSummary: vi.fn(),
+  getPcSales: vi.fn(),
   getAttendanceReport: vi.fn(),
   getCashOnHand: vi.fn().mockResolvedValue({
     coin_box: { uncollected_cents: 0, last_collection: null },
@@ -56,6 +57,16 @@ const overview = {
       total_sales_cents: 0,
     },
   ],
+};
+
+const pcSales = {
+  from_date: "2026-08-01",
+  to_date: "2026-08-31",
+  pcs: [
+    { id: "pc-01", name: "PC 01", coin_sales_cents: 200, voucher_sales_cents: 0 },
+    { id: "pc-02", name: "PC 02", coin_sales_cents: 500, voucher_sales_cents: 500 },
+  ],
+  unassigned: { coin_sales_cents: 0, voucher_sales_cents: 2_000 },
 };
 
 const dailySummary = {
@@ -165,28 +176,61 @@ describe("Sales Report", () => {
     vi.clearAllMocks();
     vi.mocked(api.getSalesReportOverview).mockResolvedValue(overview);
     vi.mocked(api.getReportSummary).mockResolvedValue(dailySummary);
+    vi.mocked(api.getPcSales).mockResolvedValue(pcSales);
     vi.mocked(api.getAttendanceReport).mockResolvedValue(attendanceReport);
   });
 
-  it("renders sales-only summary cards and the all-PC breakdown table", async () => {
+  it("renders the four fixed cards and the ranged per-PC table", async () => {
     const view = render(ReportsPage);
 
     await waitFor(() => expect(view.getByText("PC Breakdown")).toBeTruthy());
     expect(api.getSalesReportOverview).toHaveBeenCalledOnce();
     expect(view.getByText("Summary")).toBeTruthy();
-    expect(view.getAllByText("Daily Sales").length).toBe(2);
-    expect(view.getAllByText("Weekly Sales").length).toBe(2);
-    expect(view.getAllByText("Monthly Sales").length).toBe(2);
-    expect(view.getAllByText("Total Sales").length).toBe(2);
-    expect(view.getAllByText("Aug 3–9, 2026").length).toBe(2);
-    expect(view.getByText("PC 01")).toBeTruthy();
-    expect(view.getByText("PC 02")).toBeTruthy();
-    expect(
-      view.getByRole("table", { name: "Sales breakdown by PC" }),
-    ).toBeTruthy();
+    for (const label of ["Daily Sales", "Weekly Sales", "Monthly Sales", "Total Sales"]) {
+      expect(view.getAllByText(label).length).toBe(1);
+    }
+    expect(view.getByRole("table", { name: "Sales breakdown by PC" })).toBeTruthy();
     expect(view.queryByText("Free Time Dispensed")).toBeNull();
     expect(view.queryByText("Points Minted by Wheel")).toBeNull();
     expect(view.queryByText("Points Liability")).toBeNull();
+  });
+
+  it("shows each PC's Coin and Voucher Sales plus the unassigned row, following the range", async () => {
+    const view = render(ReportsPage);
+    await waitFor(() =>
+      expect(api.getPcSales).toHaveBeenCalledWith("2026-08-01", "2026-08-31"),
+    );
+
+    const rows = await chartRows(view, /Sales breakdown by PC/);
+    const bodyRows = rows.filter((row) => row.querySelector("td"));
+    const line = (row: HTMLElement) => [
+      row.querySelector("th")?.textContent?.trim(),
+      ...cells(row).map((cell) => cell?.trim()),
+    ];
+    expect(bodyRows.map(line)).toEqual([
+      ["PC 01", formatMoney(200), formatMoney(0), formatMoney(200)],
+      ["PC 02", formatMoney(500), formatMoney(500), formatMoney(1_000)],
+      ["Unassigned", formatMoney(0), formatMoney(2_000), formatMoney(2_000)],
+    ]);
+
+    vi.mocked(api.getPcSales).mockResolvedValueOnce({
+      ...pcSales,
+      pcs: [
+        { id: "pc-01", name: "PC 01", coin_sales_cents: 100, voucher_sales_cents: 0 },
+        { id: "pc-02", name: "PC 02", coin_sales_cents: 0, voucher_sales_cents: 0 },
+      ],
+      unassigned: { coin_sales_cents: 0, voucher_sales_cents: 0 },
+    });
+    await fireEvent.click(view.getByRole("button", { name: "Today" }));
+    await waitFor(() =>
+      expect(api.getPcSales).toHaveBeenLastCalledWith("2026-08-06", "2026-08-06"),
+    );
+    await waitFor(() => {
+      const next = within(view.getByRole("table", { name: /Sales breakdown by PC/ }))
+        .getAllByRole("row")
+        .filter((row) => row.querySelector("td"));
+      expect(line(next[0])[3]).toBe(formatMoney(100));
+    });
   });
 
   it("opens on This month, anchored to the server's business date", async () => {

@@ -25,6 +25,7 @@
     AttendanceReportInput,
     AttendanceEarningMonthRow,
     AttendanceReportPeriod,
+    PcSalesReport,
     ReportSummary,
     SalesReportOverview,
   } from "../types";
@@ -61,6 +62,7 @@
   let customTo = $state("");
   let customError = $state("");
   let rangeSummary = $state<ReportSummary | null>(null);
+  let pcSales = $state<PcSalesReport | null>(null);
   let rangeBucket = $state<SalesBucket>("day");
   let rangeFrom = $state("");
   let rangeTo = $state("");
@@ -89,12 +91,17 @@
     rangeTo = to;
     rangeBucket = bucket;
     try {
-      const summary = await api.getReportSummary(bucket, from, to);
+      const [summary, perPc] = await Promise.all([
+        api.getReportSummary(bucket, from, to),
+        api.getPcSales(from, to),
+      ]);
       if (request !== rangeRequest) return;
       rangeSummary = summary;
+      pcSales = perPc;
     } catch (caught) {
       if (request !== rangeRequest) return;
       rangeSummary = null;
+      pcSales = null;
       rangeLoadError = caught instanceof Error ? caught.message : String(caught);
     } finally {
       if (request === rangeRequest) rangeBusy = false;
@@ -123,6 +130,16 @@
   function salesPeriodRange(period: SalesReportOverview["daily"] | undefined): string {
     return period ? formatSalesDateRange(period.from_date, period.to_date) : "";
   }
+
+  /** Each PC, then the Cash Revenue that belongs to no PC (single-mint sold vouchers). */
+  let pcSalesRows = $derived(
+    pcSales
+      ? [
+          ...pcSales.pcs,
+          { id: "unassigned", name: "Unassigned", ...pcSales.unassigned },
+        ]
+      : [],
+  );
 
   /** Earning Month state pill colours; the label text always carries the state. */
   const STATE_STYLE: Record<AttendanceEarningMonthRow["state"], string> = {
@@ -397,103 +414,77 @@
     </div>
   </section>
 
-  {#if salesReport}
+  {#if pcSales}
     <section class="rounded-lg border bg-card" aria-labelledby="pc-breakdown-heading">
       <div class="flex items-baseline justify-between gap-3 border-b px-4 py-3">
         <h3 id="pc-breakdown-heading" class="font-semibold">PC Breakdown</h3>
-        {#if salesReport.pcs.length > 0}
-          <p class="text-xs text-muted-foreground">
-            {salesReport.pcs.length} {salesReport.pcs.length === 1 ? "PC" : "PCs"}
-          </p>
-        {/if}
+        <p class="text-xs text-muted-foreground">{formatSalesDateRange(pcSales.from_date, pcSales.to_date)}</p>
       </div>
 
-      {#if salesReport.pcs.length > 0}
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <caption class="sr-only">Sales breakdown by PC</caption>
-            <thead>
-              <tr class="border-b text-left text-xs text-muted-foreground max-md:hidden">
-                <th scope="col" class="px-4 py-2 font-medium">PC</th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Daily Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.daily)}</span>
-                </th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Weekly Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.weekly)}</span>
-                </th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Monthly Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.monthly)}</span>
-                </th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">
-                  <span class="block">Total Sales</span>
-                  <span class="block font-normal">{salesPeriodRange(salesReport.total)}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y">
-              <ResponsiveRows rows={salesReport.pcs}>
-                {#snippet row(pc)}
-                  <tr class="hover:bg-muted/50">
-                    <th scope="row" class="px-4 py-2.5 text-left font-medium">{pc.name}</th>
-                    {#each [pc.daily_sales_cents, pc.weekly_sales_cents, pc.monthly_sales_cents] as cents}
-                      <td class="px-4 py-2.5 text-right tabular-nums {cents === 0 ? 'text-muted-foreground' : ''}">
-                        {formatMoney(cents)}
-                      </td>
-                    {/each}
-                    <td
-                      class="px-4 py-2.5 text-right font-semibold tabular-nums {pc.total_sales_cents === 0 ? 'text-muted-foreground' : ''}"
-                    >
-                      {formatMoney(pc.total_sales_cents)}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <caption class="sr-only">Sales breakdown by PC</caption>
+          <thead>
+            <tr class="border-b text-left text-xs text-muted-foreground max-md:hidden">
+              <th scope="col" class="px-4 py-2 font-medium">PC</th>
+              <th scope="col" class="px-4 py-2 text-right font-medium">Coin Sales</th>
+              <th scope="col" class="px-4 py-2 text-right font-medium">Voucher Sales</th>
+              <th scope="col" class="px-4 py-2 text-right font-medium">Cash Revenue</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <ResponsiveRows rows={pcSalesRows}>
+              {#snippet row(pc)}
+                <tr class="hover:bg-muted/50">
+                  <th scope="row" class="px-4 py-2.5 text-left font-medium">{pc.name}</th>
+                  {#each [pc.coin_sales_cents, pc.voucher_sales_cents] as cents}
+                    <td class="px-4 py-2.5 text-right tabular-nums {cents === 0 ? 'text-muted-foreground' : ''}">
+                      {formatMoney(cents)}
                     </td>
-                  </tr>
-                {/snippet}
-                {#snippet card(pc)}
-                  {@const figures = [
-                    { label: "Daily Sales", cents: pc.daily_sales_cents },
-                    { label: "Weekly Sales", cents: pc.weekly_sales_cents },
-                    { label: "Monthly Sales", cents: pc.monthly_sales_cents },
-                    { label: "Total Sales", cents: pc.total_sales_cents },
-                  ]}
-                  <tr>
-                    <td colspan="5" class="px-4 py-3">
-                      <article aria-label={pc.name}>
-                        <!-- `wrap-anywhere`, not `break-words`: this card is a
-                             single colspan cell in an auto-layout table, and
-                             only `overflow-wrap: anywhere` lowers the cell's
-                             min-content width enough for the table to stop
-                             widening past the phone viewport. -->
-                        <h4 class="font-semibold max-md:wrap-anywhere">{pc.name}</h4>
-                        <dl class="mt-2 space-y-1.5">
-                          {#each figures as figure}
-                            <div class="flex items-baseline justify-between gap-3">
-                              <dt class="min-w-0 text-sm text-muted-foreground">
-                                {figure.label}
-                              </dt>
-                              <dd
-                                class="tabular-nums {figure.label === 'Total Sales' ? 'font-semibold' : 'font-medium'} {figure.cents === 0 ? 'text-muted-foreground' : ''}"
-                              >
-                                {formatMoney(figure.cents)}
-                              </dd>
-                            </div>
-                          {/each}
-                        </dl>
-                      </article>
-                    </td>
-                  </tr>
-                {/snippet}
-              </ResponsiveRows>
-            </tbody>
-          </table>
-        </div>
-      {:else}
-        <p class="px-4 py-10 text-center text-sm text-muted-foreground">
-          No PCs registered. Add one in
-          <a class="font-medium text-foreground underline underline-offset-2 hover:no-underline" href="/admin/settings/pcs">Settings → PCs</a>.
-        </p>
-      {/if}
+                  {/each}
+                  <td class="px-4 py-2.5 text-right font-semibold tabular-nums">
+                    {formatMoney(pc.coin_sales_cents + pc.voucher_sales_cents)}
+                  </td>
+                </tr>
+              {/snippet}
+              {#snippet card(pc)}
+                {@const figures = [
+                  { label: "Coin Sales", cents: pc.coin_sales_cents },
+                  { label: "Voucher Sales", cents: pc.voucher_sales_cents },
+                  { label: "Cash Revenue", cents: pc.coin_sales_cents + pc.voucher_sales_cents },
+                ]}
+                <tr>
+                  <td colspan="4" class="px-4 py-3">
+                    <article aria-label={pc.name}>
+                      <!-- `wrap-anywhere`, not `break-words`: this card is a
+                           single colspan cell in an auto-layout table, and
+                           only `overflow-wrap: anywhere` lowers the cell's
+                           min-content width enough for the table to stop
+                           widening past the phone viewport. -->
+                      <h4 class="font-semibold max-md:wrap-anywhere">{pc.name}</h4>
+                      <dl class="mt-2 space-y-1.5">
+                        {#each figures as figure}
+                          <div class="flex items-baseline justify-between gap-3">
+                            <dt class="min-w-0 text-sm text-muted-foreground">{figure.label}</dt>
+                            <dd
+                              class="tabular-nums {figure.label === 'Cash Revenue' ? 'font-semibold' : 'font-medium'} {figure.cents === 0 ? 'text-muted-foreground' : ''}"
+                            >
+                              {formatMoney(figure.cents)}
+                            </dd>
+                          </div>
+                        {/each}
+                      </dl>
+                    </article>
+                  </td>
+                </tr>
+              {/snippet}
+            </ResponsiveRows>
+          </tbody>
+        </table>
+      </div>
+      <p class="border-t px-4 py-2 text-xs text-muted-foreground">
+        Batch-sold voucher cash counts at the PC where the card was redeemed. Unassigned is voucher cash sold at the counter with no PC.
+      </p>
     </section>
   {/if}
 

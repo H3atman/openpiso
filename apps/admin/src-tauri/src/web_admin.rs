@@ -64,7 +64,7 @@ use crate::{
         OwnerAccount, OwnerAuthResponse, OwnerPinInput, Pc, PcMonitoringEnabledInput,
         PcMonitoringStatus, PcMonitoringSuppression, PcMonitoringSuppressionCancelInput,
         PcMonitoringSuppressionCancelled, PcMonitoringSuppressionInput, PcRegisterInput, PcReport,
-        PcReportInput, PcSettings, PcSettingsInput, PendingPointsTransfer, PointsTransferRequest,
+        PcReportInput, PcSalesInput, PcSalesReport, PcSettings, PcSettingsInput, PendingPointsTransfer, PointsTransferRequest,
         RedemptionTier, RedemptionTiersInput, ReportSummary, ReportSummaryInput,
         SalesReportOverview, ShopHoursSettingsInput, ShopHoursSettingsResponse, ShopOverrideInput,
         ShopRate, ShopRateInput, ShopStatus, ThemeSettings, ThemeSettingsInput, TodayReport,
@@ -568,6 +568,7 @@ pub(crate) fn router(state: OwnerServerState) -> Router {
         .route("/web-admin/cash-collections", post(collect_cash))
         .route("/web-admin/reports/summary", post(report_summary))
         .route("/web-admin/reports/overview", get(sales_report_overview))
+        .route("/web-admin/reports/pc-sales", post(pc_sales_report))
         .route("/web-admin/reports/attendance", post(attendance_report))
         .route("/web-admin/reports/account", post(account_report))
         .route("/web-admin/reports/pc", post(pc_report))
@@ -2156,6 +2157,16 @@ async fn sales_report_overview(
     _session: OwnerSession,
 ) -> HttpResult<SalesReportOverview> {
     reports::sales_report_overview(&state.pool).await.map(Json)
+}
+
+async fn pc_sales_report(
+    State(state): State<OwnerServerState>,
+    _session: OwnerSession,
+    Json(input): Json<PcSalesInput>,
+) -> HttpResult<PcSalesReport> {
+    reports::pc_sales_report(&state.pool, &input.from_date, &input.to_date)
+        .await
+        .map(Json)
 }
 
 async fn account_report(
@@ -6351,6 +6362,147 @@ mod tests {
             .map(|bucket| bucket["period_label"].as_str().expect("label"))
             .collect();
         assert_eq!(labels, ["2025-12", "2026-01"]);
+    }
+
+    /// The ranged per-PC read splits each PC's Cash Revenue into Coin and
+    /// Voucher Sales, puts PC-less voucher cash in `unassigned`, and the rows
+    /// add up to the range's Cash Revenue (#38).
+    #[tokio::test]
+    async fn pc_sales_splits_per_pc_with_unassigned_and_follows_range() {
+        use chrono::Local;
+
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let sessions = state.sessions.clone();
+        let account = accounts::create(&pool, "pc-sales-redeemer", "password", AccountCreator::Admin, None)
+            .await
+            .expect("account should be created");
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "pc-sales-pin").await;
+        let auth = |request: reqwest::RequestBuilder| request.owner(&token);
+
+        // A: coin 100. B: coin 500 plus a redeemed ₱5 batch card. No PC: ₱20 sold voucher.
+        for (pc_id, amount_cents) in [("pc-01", 100), ("pc-02", 500)] {
+            sessions
+                .record_coin_event(
+                    &pool,
+                    &crate::models::CoinEventInput {
+                        pc_id: pc_id.to_owned(),
+                        amount_cents,
+                        pulse_count: Some(1),
+                        timestamp: None,
+                    },
+                    &crate::models::CoinSourceClaim::Simulator,
+                )
+                .await
+                .expect("coin should be accepted");
+        }
+        let sold = auth(client.post(format!("http://{address}/web-admin/vouchers")))
+            .json(&serde_json::json!({
+                "seconds_value": 600, "points_value_centi": 0,
+                "sold_amount_cents": 2_000, "expires_at": null
+            }))
+            .send()
+            .await
+            .expect("sold voucher should complete");
+        assert_eq!(sold.status(), StatusCode::OK);
+        let batch = auth(client.post(format!("http://{address}/web-admin/voucher-batches")))
+            .json(&serde_json::json!({
+                "prefix": "SOLD", "suffix_length": 8, "count": 1,
+                "seconds_value": 600, "points_value_centi": 0, "cash_amount_cents": 500
+            }))
+            .send()
+            .await
+            .expect("batch should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("batch JSON");
+        let code: String = sqlx::query_scalar("SELECT code FROM vouchers WHERE batch_id = ?")
+            .bind(batch["id"].as_str().expect("batch id"))
+            .fetch_one(&pool)
+            .await
+            .expect("batch card should exist");
+        db::redeem_voucher(&pool, &account.id, "pc-02", &code)
+            .await
+            .expect("batch card should redeem");
+
+        let pc_sales = |from: String, to: String| {
+            let request = auth(client.post(format!("http://{address}/web-admin/reports/pc-sales")));
+            async move {
+                request
+                    .json(&serde_json::json!({ "from_date": from, "to_date": to }))
+                    .send()
+                    .await
+                    .expect("pc sales should complete")
+            }
+        };
+        let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let row = |body: &serde_json::Value, id: &str| {
+            body["pcs"]
+                .as_array()
+                .expect("pcs array")
+                .iter()
+                .find(|pc| pc["id"] == id)
+                .cloned()
+                .expect("pc row")
+        };
+
+        let response = pc_sales(today.clone(), today.clone()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.json::<serde_json::Value>().await.expect("pc sales JSON");
+        assert_eq!(body["pcs"].as_array().map(Vec::len), Some(4));
+        let a = row(&body, "pc-01");
+        assert_eq!((&a["coin_sales_cents"], &a["voucher_sales_cents"]), (&100.into(), &0.into()));
+        let b = row(&body, "pc-02");
+        assert_eq!((&b["coin_sales_cents"], &b["voucher_sales_cents"]), (&500.into(), &500.into()));
+        assert_eq!(b["name"], "PC 02");
+        assert_eq!(
+            body["unassigned"],
+            serde_json::json!({ "coin_sales_cents": 0, "voucher_sales_cents": 2_000 })
+        );
+        // PC rows + unassigned = the summary's Cash Revenue for the same range.
+        let summary = auth(client.post(format!("http://{address}/web-admin/reports/summary")))
+            .json(&serde_json::json!({ "period": "day", "from_date": today, "to_date": today }))
+            .send()
+            .await
+            .expect("summary should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("summary JSON");
+        let sum_of = |key: &str| -> i64 {
+            body["pcs"]
+                .as_array()
+                .expect("pcs array")
+                .iter()
+                .map(|pc| pc[key].as_i64().expect("cents"))
+                .sum::<i64>()
+                + body["unassigned"][key].as_i64().expect("unassigned cents")
+        };
+        assert_eq!(sum_of("coin_sales_cents"), summary["coin_sales_cents"].as_i64().unwrap());
+        assert_eq!(sum_of("voucher_sales_cents"), summary["voucher_sales_cents"].as_i64().unwrap());
+        assert_eq!(sum_of("coin_sales_cents") + sum_of("voucher_sales_cents"), 3_100);
+
+        // A range that excludes today gives every PC and the unassigned row zeros.
+        let empty = pc_sales("2000-01-01".to_owned(), "2000-01-31".to_owned())
+            .await
+            .json::<serde_json::Value>()
+            .await
+            .expect("empty pc sales JSON");
+        assert_eq!(empty["pcs"].as_array().map(Vec::len), Some(4));
+        assert!(empty["pcs"].as_array().expect("pcs").iter().all(|pc| {
+            pc["coin_sales_cents"] == 0 && pc["voucher_sales_cents"] == 0
+        }));
+        assert_eq!(
+            empty["unassigned"],
+            serde_json::json!({ "coin_sales_cents": 0, "voucher_sales_cents": 0 })
+        );
+
+        // A reversed range is refused, as for the summary.
+        assert_eq!(
+            pc_sales("2026-02-01".to_owned(), "2026-01-01".to_owned()).await.status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     /// An inclusive From–To range keeps every event whose Admin-local date is in

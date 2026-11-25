@@ -7,8 +7,8 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use crate::{
     errors::{AppError, AppResult},
     models::{
-        AuditFilterInput, AuditRow, PcReport, ReportBucket, ReportSummary, SalesReportOverview,
-        SalesReportPc, SalesReportPeriod,
+        AuditFilterInput, AuditRow, PcReport, PcSalesReport, PcSalesRow, ReportBucket, ReportSummary, SalesReportOverview,
+        SalesReportPc, SalesReportPeriod, SalesSplit,
     },
 };
 
@@ -252,6 +252,69 @@ pub async fn sales_report_overview(pool: &SqlitePool) -> AppResult<SalesReportOv
         monthly: dated_sales_period(&ranges.monthly, monthly),
         total: total_sales_period(total),
         pcs,
+    })
+}
+
+/// Coin Sales and Voucher Sales per PC for an inclusive range of Admin-local
+/// dates, read from the canonical cash-revenue view (ADR-0014). Batch-sold
+/// voucher cash sits on the PC where the card was redeemed; Cash Revenue with
+/// no registered PC lands in `unassigned`, so every row sums to the range total.
+pub async fn pc_sales_report(
+    pool: &SqlitePool,
+    from_date: &str,
+    to_date: &str,
+) -> AppResult<PcSalesReport> {
+    validate_date_range(Some(from_date), Some(to_date))?;
+    let rows = sqlx::query_as::<_, (Option<String>, i64, i64)>(&format!(
+        "SELECT pc_id, SUM({}), SUM({})
+         FROM report_cash_revenue
+         WHERE business_date BETWEEN ? AND ?
+         GROUP BY pc_id",
+        sales_kind_amount(SalesKind::Coin),
+        sales_kind_amount(SalesKind::Voucher),
+    ))
+    .bind(from_date)
+    .bind(to_date)
+    .fetch_all(pool)
+    .await?;
+    let mut by_pc: BTreeMap<Option<String>, SalesSplit> = rows
+        .into_iter()
+        .map(|(pc_id, coin, voucher)| {
+            (
+                pc_id,
+                SalesSplit {
+                    coin_sales_cents: coin,
+                    voucher_sales_cents: voucher,
+                },
+            )
+        })
+        .collect();
+
+    let mut pcs = sqlx::query_as::<_, (String, String)>("SELECT id, name FROM pcs")
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|(id, name)| PcSalesRow {
+            sales: by_pc.remove(&Some(id.clone())).unwrap_or_default(),
+            id,
+            name,
+        })
+        .collect::<Vec<_>>();
+    pcs.sort_by(|left, right| {
+        natural_string_cmp(&left.name, &right.name).then_with(|| left.id.cmp(&right.id))
+    });
+
+    // Whatever no registered PC claimed (no PC id, or a PC since removed).
+    let unassigned = by_pc.into_values().fold(SalesSplit::default(), |mut sum, row| {
+        sum.coin_sales_cents += row.coin_sales_cents;
+        sum.voucher_sales_cents += row.voucher_sales_cents;
+        sum
+    });
+    Ok(PcSalesReport {
+        from_date: from_date.to_owned(),
+        to_date: to_date.to_owned(),
+        pcs,
+        unassigned,
     })
 }
 
