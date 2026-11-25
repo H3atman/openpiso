@@ -724,7 +724,7 @@ anchored to that PC, so sold vouchers without a PC remain in the Summary Total
 but are not assigned to a PC.
 
 `POST /web-admin/reports/summary` returns cash
-revenue, free time dispensed, points minted by wheel, points liability,
+revenue split into Coin Sales and Voucher Sales, free time dispensed, points minted by wheel, points liability,
 and per-period buckets:
 
 ```json
@@ -732,6 +732,8 @@ and per-period buckets:
   "period": "day",
   "from_date": "2026-06-01",
   "to_date": "2026-06-21",
+  "coin_sales_cents": 3000,
+  "voucher_sales_cents": 2000,
   "cash_revenue_cents": 5000,
   "free_time_dispensed_seconds": 900,
   "points_minted_by_wheel_centi": 400,
@@ -739,6 +741,8 @@ and per-period buckets:
   "buckets": [
     {
       "period_label": "2026-06-21",
+      "coin_sales_cents": 3000,
+      "voucher_sales_cents": 2000,
       "cash_revenue_cents": 5000,
       "free_time_dispensed_seconds": 900,
       "points_minted_by_wheel_centi": 400
@@ -747,16 +751,24 @@ and per-period buckets:
 }
 ```
 
-Cash revenue = coins + sold vouchers. Free time dispensed = promo voucher
+Cash Revenue = Coin Sales + Voucher Sales, exactly, per bucket and in total.
+Coin Sales = accepted coins (`coin_accepted`) + Rejection Credits
+(`rejection_credit`). Voucher Sales = single-mint sold vouchers
+(`voucher_sold`) + batch-sold cards recognised at redemption
+(`sold_voucher_redeemed`). Free time dispensed = promo voucher
 redemptions + points redemptions + wheel winnings + manual admin add-time +
 Coin Promo bonus seconds. A Coin Promo coin's full cash stays in revenue; only
 its bonus seconds count as free time. The two are never blended (ADR-0014).
 `points_minted_by_wheel_centi` is the
 gross centipoints won through the wheel over the period (not net of spin
-costs; ADR-0046). `period` is `day`, `week`, or `month`. Date fields are
+costs; ADR-0046). `period` is `day`, `week`, or `month`. Bucket
+`period_label` is the local date (`YYYY-MM-DD`) for `day`, the ISO date of the
+week's Monday for `week` (so a Monday–Sunday week spanning New Year is one
+bucket), and `YYYY-MM` for `month`. Date fields are
 optional `YYYY-MM-DD` local-date strings; omitting both reads all history. The
 Sales Report page reads this endpoint with `period: "day"` over one calendar
-month to draw the Daily Sales Trend line chart. Days with no revenue are absent
+month to draw the Daily Sales Trend chart, with Coin Sales and Voucher Sales
+stacked and the total in the tooltip. Days with no revenue are absent
 from `buckets` and the page fills them as zero; days after the admin host's
 business date are left off the plot rather than drawn as zero.
 

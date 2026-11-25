@@ -62,12 +62,15 @@
     month: number,
     buckets: readonly ReportBucket[],
   ): DailySalesPoint[] {
-    const byDate = new Map(
-      buckets.map((bucket) => [bucket.period_label, bucket.cash_revenue_cents]),
-    );
+    const byDate = new Map(buckets.map((bucket) => [bucket.period_label, bucket]));
     return Array.from({ length: lastDayOfMonth(year, month) }, (_, index) => {
       const date = isoDate(year, month, index + 1);
-      return { date, cents: byDate.get(date) ?? 0 };
+      const bucket = byDate.get(date);
+      return {
+        date,
+        coin_cents: bucket?.coin_sales_cents ?? 0,
+        voucher_cents: bucket?.voucher_sales_cents ?? 0,
+      };
     });
   }
 

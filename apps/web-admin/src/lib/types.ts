@@ -421,7 +421,11 @@ export interface OwnerAuth {
 export type ReportPeriod = "day" | "week" | "month";
 
 export interface ReportBucket {
+  /** `YYYY-MM-DD` for day buckets, the week's Monday for week buckets, `YYYY-MM` for months. */
   period_label: string;
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+  /** Always `coin_sales_cents + voucher_sales_cents`. */
   cash_revenue_cents: number;
   free_time_dispensed_seconds: number;
   points_minted_by_wheel_centi: number;
@@ -431,6 +435,9 @@ export interface ReportSummary {
   period: ReportPeriod;
   from_date: string;
   to_date: string;
+  coin_sales_cents: number;
+  voucher_sales_cents: number;
+  /** Always `coin_sales_cents + voucher_sales_cents`. */
   cash_revenue_cents: number;
   free_time_dispensed_seconds: number;
   points_minted_by_wheel_centi: number;
@@ -441,7 +448,8 @@ export interface ReportSummary {
 /** One day of the daily sales trend, derived from `ReportSummary.buckets`. */
 export interface DailySalesPoint {
   date: string;
-  cents: number;
+  coin_cents: number;
+  voucher_cents: number;
 }
 
 export interface PcReport {

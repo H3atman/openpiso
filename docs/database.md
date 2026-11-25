@@ -358,7 +358,13 @@ Reporting views:
   `business_week`,
   `business_month`, `account_id`, `pc_id`, `event_type`, `amount_cents`,
   `seconds_delta`, `audit_event_id`, and `created_at` so per-period and
-  per-dimension totals reconcile exactly with canonical events.
+  per-dimension totals reconcile exactly with canonical events. The report
+  summary splits it by `event_type` into Coin Sales (`coin_accepted`,
+  `rejection_credit`) and Voucher Sales (`voucher_sold`,
+  `sold_voucher_redeemed`); the grouping lives in
+  `openpiso_core::report::SalesKind`. Its week buckets are labelled by the
+  week's Monday (`date(business_date, 'weekday 0', '-6 days')`) in the query,
+  not by the view's `business_week` (`%Y-W%W`), which splits New Year weeks.
 - `report_free_time_dispensed` — time given away without cash:
   `promo_voucher_redeemed`, `points_redeemed`, `wheel_spin`, and
   `manual_adjustment` events with `seconds_delta > 0`, plus only the positive

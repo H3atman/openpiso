@@ -1,7 +1,7 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::BTreeMap};
 
 use chrono::{Datelike, Duration, Local, NaiveDateTime, TimeZone, Utc};
-use openpiso_core::report::{category_for_event_type, AuditCategory, ReportPeriod};
+use openpiso_core::report::{category_for_event_type, AuditCategory, ReportPeriod, SalesKind};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 use crate::{
@@ -52,21 +52,21 @@ fn clamp_limit(value: Option<i64>, default: i64, max: i64) -> i64 {
     value.unwrap_or(default).clamp(1, max)
 }
 
-/// Sum a column from a reporting view, grouped by the selected period column,
+/// Sum an expression over a reporting view, grouped by the selected bucket,
 /// with optional date-range filtering. Shared by cash-revenue, free-time,
 /// and points-minted queries (avoids three near-identical query blocks).
 async fn report_view_buckets(
     pool: &SqlitePool,
     view: &str,
-    sum_column: &str,
-    period_column: &str,
+    sum_expr: &str,
+    bucket: &str,
     from_date: Option<&str>,
     to_date: Option<&str>,
 ) -> AppResult<Vec<(String, i64)>> {
     let mut query = QueryBuilder::<Sqlite>::new("SELECT ");
-    query.push(period_column);
+    query.push(bucket);
     query.push(" AS period_label, COALESCE(SUM(");
-    query.push(sum_column);
+    query.push(sum_expr);
     query.push("), 0) FROM ");
     query.push(view);
     query.push(" WHERE 1=1");
@@ -80,20 +80,30 @@ async fn report_view_buckets(
             .push(" AND business_date <= ")
             .push_bind(to.to_owned());
     }
-    query.push(" GROUP BY ");
-    query.push(period_column);
-    query.push(" ORDER BY ");
-    query.push(period_column);
+    query.push(" GROUP BY period_label ORDER BY period_label");
     Ok(query
         .build_query_as::<(String, i64)>()
         .fetch_all(pool)
         .await?)
 }
 
+/// SQL sum expression for one half of Cash Revenue. The event types are
+/// static literals from [`SalesKind`], never user input.
+fn sales_kind_amount(kind: SalesKind) -> String {
+    let types = kind
+        .event_types()
+        .iter()
+        .map(|event_type| format!("'{event_type}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("CASE WHEN event_type IN ({types}) THEN amount_cents ELSE 0 END")
+}
+
 /// Returns the unified report summary across the selected period and date
-/// range. Cash Revenue and Free Time Dispensed are read from the canonical
-/// audit_log views so the totals reconcile exactly with the event stream
-/// (ADR-0014 / ADR-0015). Points Liability is a current snapshot.
+/// range. Cash Revenue (split into Coin Sales and Voucher Sales) and Free Time
+/// Dispensed are read from the canonical audit_log views so the totals
+/// reconcile exactly with the event stream (ADR-0014 / ADR-0015). Points
+/// Liability is a current snapshot.
 pub async fn report_summary(
     pool: &SqlitePool,
     period: ReportPeriod,
@@ -101,98 +111,64 @@ pub async fn report_summary(
     to_date: Option<&str>,
 ) -> AppResult<ReportSummary> {
     validate_date_range(from_date, to_date)?;
-    let period_column = period.sqlite_column();
+    let bucket = period.sqlite_bucket();
+    let buckets_of = |view: &'static str, sum: String| async move {
+        report_view_buckets(pool, view, &sum, bucket, from_date, to_date).await
+    };
 
-    let cash_buckets = report_view_buckets(
-        pool,
-        "report_cash_revenue",
-        "amount_cents",
-        period_column,
-        from_date,
-        to_date,
-    )
-    .await?;
-    let free_time_buckets = report_view_buckets(
-        pool,
-        "report_free_time_dispensed",
-        "seconds_delta",
-        period_column,
-        from_date,
-        to_date,
-    )
-    .await?;
-    let points_minted_buckets = report_view_buckets(
-        pool,
+    let coin = buckets_of("report_cash_revenue", sales_kind_amount(SalesKind::Coin)).await?;
+    let voucher = buckets_of("report_cash_revenue", sales_kind_amount(SalesKind::Voucher)).await?;
+    let free_time = buckets_of("report_free_time_dispensed", "seconds_delta".to_owned()).await?;
+    let points_minted = buckets_of(
         "report_points_minted_by_wheel",
-        "points_won_centi",
-        period_column,
-        from_date,
-        to_date,
+        "points_won_centi".to_owned(),
     )
     .await?;
 
-    // Merge all three bucket sets into one list. A period label present in any
-    // set gets a single bucket with values aggregated from all three.
-    let mut labels: Vec<&str> = Vec::new();
-    for (label, _, _) in cash_buckets
-        .iter()
-        .map(|(l, _)| (l.as_str(), 0_i64, 0_i64))
-        .chain(
-            free_time_buckets
-                .iter()
-                .map(|(l, _)| (l.as_str(), 0_i64, 0_i64)),
-        )
-        .chain(
-            points_minted_buckets
-                .iter()
-                .map(|(l, _)| (l.as_str(), 0_i64, 0_i64)),
-        )
-    {
-        if !labels.contains(&label) {
-            labels.push(label);
+    // Merge the bucket sets into one list ordered by label. A label present in
+    // any set gets a single bucket with values from all of them.
+    let mut merged: BTreeMap<String, ReportBucket> = BTreeMap::new();
+    let mut add = |rows: Vec<(String, i64)>, apply: fn(&mut ReportBucket, i64)| {
+        for (label, value) in rows {
+            let bucket = merged.entry(label.clone()).or_insert_with(|| ReportBucket {
+                period_label: label,
+                coin_sales_cents: 0,
+                voucher_sales_cents: 0,
+                cash_revenue_cents: 0,
+                free_time_dispensed_seconds: 0,
+                points_minted_by_wheel_centi: 0,
+            });
+            apply(bucket, value);
         }
-    }
-    labels.sort();
+    };
+    add(coin, |b, v| {
+        b.coin_sales_cents = v;
+        b.cash_revenue_cents += v;
+    });
+    add(voucher, |b, v| {
+        b.voucher_sales_cents = v;
+        b.cash_revenue_cents += v;
+    });
+    add(free_time, |b, v| b.free_time_dispensed_seconds = v);
+    add(points_minted, |b, v| b.points_minted_by_wheel_centi = v);
+    let buckets: Vec<ReportBucket> = merged.into_values().collect();
 
-    let mut buckets = Vec::with_capacity(labels.len());
-    for label in labels {
-        let cash = cash_buckets
-            .iter()
-            .find(|(l, _)| l == label)
-            .map(|(_, v)| *v)
-            .unwrap_or(0);
-        let free = free_time_buckets
-            .iter()
-            .find(|(l, _)| l == label)
-            .map(|(_, v)| *v)
-            .unwrap_or(0);
-        let minted = points_minted_buckets
-            .iter()
-            .find(|(l, _)| l == label)
-            .map(|(_, v)| *v)
-            .unwrap_or(0);
-        buckets.push(ReportBucket {
-            period_label: label.to_owned(),
-            cash_revenue_cents: cash,
-            free_time_dispensed_seconds: free,
-            points_minted_by_wheel_centi: minted,
-        });
-    }
-
-    let total_cash_revenue_cents: i64 = buckets.iter().map(|b| b.cash_revenue_cents).sum();
-    let total_free_time_dispensed_seconds: i64 =
-        buckets.iter().map(|b| b.free_time_dispensed_seconds).sum();
-    let total_points_minted_by_wheel_centi: i64 =
-        buckets.iter().map(|b| b.points_minted_by_wheel_centi).sum();
+    let total = |field: fn(&ReportBucket) -> i64| buckets.iter().map(field).sum::<i64>();
+    let coin_sales_cents = total(|b| b.coin_sales_cents);
+    let voucher_sales_cents = total(|b| b.voucher_sales_cents);
+    let free_time_dispensed_seconds = total(|b| b.free_time_dispensed_seconds);
+    let points_minted_by_wheel_centi = total(|b| b.points_minted_by_wheel_centi);
     let points_liability_centi = points_liability_total(pool).await?;
 
     Ok(ReportSummary {
         period,
         from_date: from_date.unwrap_or("").to_owned(),
         to_date: to_date.unwrap_or("").to_owned(),
-        cash_revenue_cents: total_cash_revenue_cents,
-        free_time_dispensed_seconds: total_free_time_dispensed_seconds,
-        points_minted_by_wheel_centi: total_points_minted_by_wheel_centi,
+        coin_sales_cents,
+        voucher_sales_cents,
+        cash_revenue_cents: coin_sales_cents + voucher_sales_cents,
+        free_time_dispensed_seconds,
+        points_minted_by_wheel_centi,
         points_liability_centi,
         buckets,
     })
