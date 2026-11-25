@@ -13,6 +13,7 @@
   import type {
     AdminSettings,
     EconomySettings,
+    RenderResult,
     Voucher,
     VoucherBatchDetail,
     VoucherBatchSummary,
@@ -26,7 +27,6 @@
   import {
     buildVoucherDocument,
     runVoucherFrame,
-    type RenderResult,
     type VoucherTokenValues,
   } from "../voucherTemplate";
 
@@ -567,12 +567,9 @@
         api.getSettings(),
       ]);
       detail = freshDetail;
-      voucherTemplate = freshTemplate;
       adminSettings = freshSettings;
-      templateHtml = freshTemplate.html;
-      templateCss = freshTemplate.css;
-      templateScript = freshTemplate.script;
 
+      // The saved template is for the print document only; the editor keeps its unsaved text.
       // Build first: a card that loses its code throws before any frame exists.
       const srcdoc = buildVoucherDocument(
         freshTemplate,

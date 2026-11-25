@@ -573,7 +573,8 @@ rejection and a blocking loop each showing their message and blocking print),
 and the HTML/CSS-only attack corpus (spec #33) run through both preview and print.
 Corpus pass means no request left the frame (a local HTTP listener, a raw TCP
 port for preconnect/SNI, and CDP frame requests not blocked by CSP) and either
-`ready` with every card's code present or a visible error/timeout.
+`ready` with every card's own code present and the Template Script run (a marker
+script), or a visible error/timeout.
 
 Same prerequisites as the App Update launcher (Linux, free ports `8080` and
 `3210`, debug Admin binary, built Web Admin); it starts its own Admin on a fresh

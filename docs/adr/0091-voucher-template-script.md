@@ -22,7 +22,7 @@ The **Voucher Template** gains an optional third part, the **Template Script**
 (JavaScript text), stored as `settings` key `voucher_template_script`, written
 in the same SQLite transaction as the HTML and CSS. The owner endpoints carry
 `html`, `css`, `script` and `default_html`, `default_css`, `default_script`
-(empty for now). An empty script is valid; blank HTML or CSS is still rejected.
+(the price-tier default script, see below). An empty script is valid; blank HTML or CSS is still rejected.
 Each part is limited to 100,000 bytes.
 
 **Render.** The script text is escaped (`</script` → `<\/script`,
@@ -71,6 +71,7 @@ corpus the harness still runs. New quirks are added to the list and the corpus.
 ## Consequences
 
 - ADR-0041 is superseded in part; its "no JavaScript" statements no longer hold.
-- The default script is empty here; a price-tier default follows separately.
+- The default script tiers each card by price (`data-tier`); it parses the price
+  strictly, so a malformed price such as `₱50..20` gets no tier.
 - Verified by the Voucher render frame harness (save/reload/reset, Run, each
   error kind blocking print).

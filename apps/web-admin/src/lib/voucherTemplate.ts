@@ -1,3 +1,5 @@
+import type { RenderResult } from "./types";
+
 export const VOUCHER_TOKENS = [
   "code",
   "time",
@@ -73,10 +75,13 @@ function randomNonce(): string {
 }
 
 /** Records the first error or unhandled rejection for the tail to report. */
+// Wrapped in a function so no bootstrap name lands in the Owner script's global scope.
 const BOOTSTRAP = `window.__voucherError = null;
-const report = (message) => { window.__voucherError ??= String(message); };
-addEventListener("error", (event) => report(event.message || "Script error"));
-addEventListener("unhandledrejection", (event) => report("Unhandled rejection: " + (event.reason?.message ?? event.reason)));`;
+(() => {
+  const report = (message) => { window.__voucherError ??= String(message); };
+  addEventListener("error", (event) => report(event.message || "Script error"));
+  addEventListener("unhandledrejection", (event) => report("Unhandled rejection: " + (event.reason?.message ?? event.reason)));
+})();`;
 
 function tail(print: boolean): string {
   return `document.fonts.ready.then(() => setTimeout(() => {
@@ -97,23 +102,20 @@ function tail(print: boolean): string {
 export interface BuildOptions {
   /** The frame calls its own `print()` once ready. */
   print?: boolean;
-  /** Fixed nonce for tests; defaults to a fresh random one per render. */
-  nonce?: string;
 }
-
-/** Thrown when a card cannot be rendered safely; shown to the Owner as-is. */
-export class VoucherRenderError extends Error {}
 
 /**
  * Creates the owner-only preview/print document for the sandboxed render frame.
  * Cleaning applies to the cards only; the document's own scripts are nonced.
- * Throws {@link VoucherRenderError} if cleaning removed a card's voucher code.
+ * Throws if a card does not contain its own escaped voucher code after cleaning
+ * (the template has no `{{code}}`, or cleaning removed it).
  */
 export function buildVoucherDocument(
   template: VoucherTemplateContent,
   cards: VoucherTokenValues[],
-  { print = false, nonce = randomNonce() }: BuildOptions = {},
+  { print = false }: BuildOptions = {},
 ): string {
+  const nonce = randomNonce();
   const css = template.css.replace(/<\/style/gi, "<\\/style");
   // `<\/` and `<\!--` keep string, comment, template-literal and regex meaning
   // while stopping the HTML parser from ending or swallowing the element.
@@ -121,12 +123,10 @@ export function buildVoucherDocument(
     .replace(/<\/script/gi, "<\\/script")
     .replaceAll("<!--", "<\\!--");
   const fragments = cards.map((values) => {
-    const filled = substituteVoucherTokens(template.html, values);
-    const cleaned = cleanCard(filled);
-    const code = escapeHtml(values.code ?? "");
-    if (code && filled.includes(code) && !cleaned.includes(code))
-      throw new VoucherRenderError(
-        `A card lost its voucher code ${values.code} while the template was cleaned. Check the Card HTML.`,
+    const cleaned = cleanCard(substituteVoucherTokens(template.html, values));
+    if (!cleaned.includes(escapeHtml(values.code ?? "")))
+      throw new Error(
+        `A card is missing its voucher code ${values.code}. Check the Card HTML includes {{code}} outside script, link and other removed elements.`,
       );
     return cleaned;
   });
@@ -145,11 +145,6 @@ export function buildVoucherDocument(
 </body>
 </html>`;
 }
-
-export type RenderResult =
-  | { type: "ready"; height: number }
-  | { type: "error"; message: string }
-  | { type: "timeout"; message: string };
 
 interface FrameMessage {
   type?: unknown;

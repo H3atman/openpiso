@@ -288,6 +288,12 @@ export interface VoucherTemplate {
   default_script: string;
 }
 
+/** Outcome of one sandboxed Voucher Template render. */
+export type RenderResult =
+  | { type: "ready"; height: number }
+  | { type: "error"; message: string }
+  | { type: "timeout"; message: string };
+
 export interface VoucherTemplateInput {
   html: string;
   css: string;
