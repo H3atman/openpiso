@@ -64,12 +64,13 @@ use crate::{
         OwnerAccount, OwnerAuthResponse, OwnerPinInput, Pc, PcMonitoringEnabledInput,
         PcMonitoringStatus, PcMonitoringSuppression, PcMonitoringSuppressionCancelInput,
         PcMonitoringSuppressionCancelled, PcMonitoringSuppressionInput, PcRegisterInput, PcReport,
-        PcReportInput, PcSalesInput, PcSalesReport, PcSettings, PcSettingsInput, PendingPointsTransfer, PointsTransferRequest,
-        RedemptionTier, RedemptionTiersInput, ReportSummary, ReportSummaryInput,
-        SalesReportOverview, ShopHoursSettingsInput, ShopHoursSettingsResponse, ShopOverrideInput,
-        ShopRate, ShopRateInput, ShopStatus, ThemeSettings, ThemeSettingsInput, TodayReport,
-        TransferCodeInput, Voucher, VoucherBatch, VoucherBatchDetail, VoucherBatchSummary,
-        VoucherTemplate, VoucherTemplateInput, WheelSettings, WheelSettingsInput,
+        PcReportInput, PcSalesInput, PcSalesReport, PcSettings, PcSettingsInput,
+        PendingPointsTransfer, PointsTransferRequest, RedemptionTier, RedemptionTiersInput,
+        ReportSummary, ReportSummaryInput, SalesReportOverview, ShopHoursSettingsInput,
+        ShopHoursSettingsResponse, ShopOverrideInput, ShopRate, ShopRateInput, ShopStatus,
+        ThemeSettings, ThemeSettingsInput, TodayReport, TransferCodeInput, Voucher, VoucherBatch,
+        VoucherBatchDetail, VoucherBatchSummary, VoucherTemplate, VoucherTemplateInput,
+        WheelSettings, WheelSettingsInput,
     },
     monitoring, owner, reports, serial_port_detection,
     sessions::{SessionStore, SignOutOutcome},
@@ -6374,9 +6375,15 @@ mod tests {
         let state = test_state().await;
         let pool = state.pool.clone();
         let sessions = state.sessions.clone();
-        let account = accounts::create(&pool, "pc-sales-redeemer", "password", AccountCreator::Admin, None)
-            .await
-            .expect("account should be created");
+        let account = accounts::create(
+            &pool,
+            "pc-sales-redeemer",
+            "password",
+            AccountCreator::Admin,
+            None,
+        )
+        .await
+        .expect("account should be created");
         let address = spawn(state).await;
         let client = reqwest::Client::new();
         let token = setup_and_token(&client, &address, "pc-sales-pin").await;
@@ -6450,12 +6457,21 @@ mod tests {
 
         let response = pc_sales(today.clone(), today.clone()).await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = response.json::<serde_json::Value>().await.expect("pc sales JSON");
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .expect("pc sales JSON");
         assert_eq!(body["pcs"].as_array().map(Vec::len), Some(4));
         let a = row(&body, "pc-01");
-        assert_eq!((&a["coin_sales_cents"], &a["voucher_sales_cents"]), (&100.into(), &0.into()));
+        assert_eq!(
+            (&a["coin_sales_cents"], &a["voucher_sales_cents"]),
+            (&100.into(), &0.into())
+        );
         let b = row(&body, "pc-02");
-        assert_eq!((&b["coin_sales_cents"], &b["voucher_sales_cents"]), (&500.into(), &500.into()));
+        assert_eq!(
+            (&b["coin_sales_cents"], &b["voucher_sales_cents"]),
+            (&500.into(), &500.into())
+        );
         assert_eq!(b["name"], "PC 02");
         assert_eq!(
             body["unassigned"],
@@ -6479,9 +6495,18 @@ mod tests {
                 .sum::<i64>()
                 + body["unassigned"][key].as_i64().expect("unassigned cents")
         };
-        assert_eq!(sum_of("coin_sales_cents"), summary["coin_sales_cents"].as_i64().unwrap());
-        assert_eq!(sum_of("voucher_sales_cents"), summary["voucher_sales_cents"].as_i64().unwrap());
-        assert_eq!(sum_of("coin_sales_cents") + sum_of("voucher_sales_cents"), 3_100);
+        assert_eq!(
+            sum_of("coin_sales_cents"),
+            summary["coin_sales_cents"].as_i64().unwrap()
+        );
+        assert_eq!(
+            sum_of("voucher_sales_cents"),
+            summary["voucher_sales_cents"].as_i64().unwrap()
+        );
+        assert_eq!(
+            sum_of("coin_sales_cents") + sum_of("voucher_sales_cents"),
+            3_100
+        );
 
         // A range that excludes today gives every PC and the unassigned row zeros.
         let empty = pc_sales("2000-01-01".to_owned(), "2000-01-31".to_owned())
@@ -6490,9 +6515,11 @@ mod tests {
             .await
             .expect("empty pc sales JSON");
         assert_eq!(empty["pcs"].as_array().map(Vec::len), Some(4));
-        assert!(empty["pcs"].as_array().expect("pcs").iter().all(|pc| {
-            pc["coin_sales_cents"] == 0 && pc["voucher_sales_cents"] == 0
-        }));
+        assert!(empty["pcs"]
+            .as_array()
+            .expect("pcs")
+            .iter()
+            .all(|pc| { pc["coin_sales_cents"] == 0 && pc["voucher_sales_cents"] == 0 }));
         assert_eq!(
             empty["unassigned"],
             serde_json::json!({ "coin_sales_cents": 0, "voucher_sales_cents": 0 })
@@ -6500,7 +6527,9 @@ mod tests {
 
         // A reversed range is refused, as for the summary.
         assert_eq!(
-            pc_sales("2026-02-01".to_owned(), "2026-01-01".to_owned()).await.status(),
+            pc_sales("2026-02-01".to_owned(), "2026-01-01".to_owned())
+                .await
+                .status(),
             StatusCode::BAD_REQUEST
         );
     }
@@ -6531,9 +6560,14 @@ mod tests {
             .earliest()
             .expect("local midnight exists")
             .with_timezone(&Utc);
-        let stamp = |instant: chrono::DateTime<Utc>| instant.to_rfc3339_opts(SecondsFormat::Secs, true);
+        let stamp =
+            |instant: chrono::DateTime<Utc>| instant.to_rfc3339_opts(SecondsFormat::Secs, true);
         for (id, amount_cents, created_at) in [
-            ("range-last-second", 100, stamp(midnight - Duration::seconds(1))),
+            (
+                "range-last-second",
+                100,
+                stamp(midnight - Duration::seconds(1)),
+            ),
             ("range-first-second", 200, stamp(midnight)),
         ] {
             sqlx::query(
@@ -6556,7 +6590,10 @@ mod tests {
         };
         let total = |response: reqwest::Response| async move {
             assert_eq!(response.status(), StatusCode::OK);
-            let body = response.json::<serde_json::Value>().await.expect("summary JSON");
+            let body = response
+                .json::<serde_json::Value>()
+                .await
+                .expect("summary JSON");
             body["cash_revenue_cents"].as_i64().expect("total")
         };
 

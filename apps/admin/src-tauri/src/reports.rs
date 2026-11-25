@@ -7,8 +7,8 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use crate::{
     errors::{AppError, AppResult},
     models::{
-        AuditFilterInput, AuditRow, PcReport, PcSalesReport, PcSalesRow, ReportBucket, ReportSummary, SalesReportOverview,
-        SalesReportPc, SalesReportPeriod, SalesSplit,
+        AuditFilterInput, AuditRow, PcReport, PcSalesReport, PcSalesRow, ReportBucket,
+        ReportSummary, SalesReportOverview, SalesReportPc, SalesReportPeriod, SalesSplit,
     },
 };
 
@@ -115,10 +115,14 @@ async fn sales_buckets(
     query.push(sales_kind_amount(SalesKind::Voucher));
     query.push("), 0) FROM report_cash_revenue WHERE 1=1");
     if let Some(from) = from_date {
-        query.push(" AND business_date >= ").push_bind(from.to_owned());
+        query
+            .push(" AND business_date >= ")
+            .push_bind(from.to_owned());
     }
     if let Some(to) = to_date {
-        query.push(" AND business_date <= ").push_bind(to.to_owned());
+        query
+            .push(" AND business_date <= ")
+            .push_bind(to.to_owned());
     }
     query.push(" GROUP BY period_label ORDER BY period_label");
     Ok(query
@@ -324,11 +328,13 @@ pub async fn pc_sales_report(
     });
 
     // Whatever no registered PC claimed (no PC id, or a PC since removed).
-    let unassigned = by_pc.into_values().fold(SalesSplit::default(), |mut sum, row| {
-        sum.coin_sales_cents += row.coin_sales_cents;
-        sum.voucher_sales_cents += row.voucher_sales_cents;
-        sum
-    });
+    let unassigned = by_pc
+        .into_values()
+        .fold(SalesSplit::default(), |mut sum, row| {
+            sum.coin_sales_cents += row.coin_sales_cents;
+            sum.voucher_sales_cents += row.voucher_sales_cents;
+            sum
+        });
     Ok(PcSalesReport {
         from_date: from_date.to_owned(),
         to_date: to_date.to_owned(),
