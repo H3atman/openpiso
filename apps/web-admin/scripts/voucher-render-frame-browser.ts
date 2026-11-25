@@ -928,6 +928,7 @@ try {
   await screenshot("preview-default.png");
 
   // Price tiers (#42): Run the default script over the 4 sample cards.
+  await clickButton("Template Script");
   const tierPreview = await runScriptPreview(
     "price tiers",
     await evaluate<string>(
@@ -941,6 +942,115 @@ try {
   );
   // Greyscale legibility is judged by eye from this screenshot.
   await screenshot("preview-price-tiers.png");
+
+  // ---- Layout: tabbed editors beside a sticky grey preview; stacked on phones.
+  const geometry = `(() => {
+    const rect = (s) => { const r = document.querySelector(s).getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; };
+    const preview = document.querySelector('${PREVIEW}');
+    const style = getComputedStyle(preview);
+    return {
+      tabs: Array.from(document.querySelectorAll('[role=tab]')).map(t => t.textContent.trim()),
+      editors: rect('[data-template-editors]'),
+      preview: rect('${PREVIEW}'),
+      position: getComputedStyle(preview.closest('[data-template-preview]')).position,
+      background: style.backgroundColor,
+      overflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  })()`;
+  type Geometry = {
+    tabs: string[];
+    editors: { left: number; top: number; right: number; bottom: number };
+    preview: { left: number; top: number; right: number; bottom: number };
+    position: string;
+    background: string;
+    overflowX: number;
+  };
+  const desktop = await evaluate<Geometry>(geometry);
+  check(
+    "layout: editors are Card HTML / Template CSS / Template Script tabs",
+    desktop.tabs.join("|") === "Card HTML|Template CSS|Template Script",
+    desktop.tabs.join("|"),
+  );
+  check(
+    "layout desktop: preview sits right of the editors",
+    desktop.preview.left >= desktop.editors.right - 1 &&
+      Math.abs(desktop.preview.top - desktop.editors.top) < 80,
+    JSON.stringify(desktop),
+  );
+  check(
+    "layout desktop: preview stays in view (sticky)",
+    desktop.position === "sticky",
+    desktop.position,
+  );
+  check(
+    "layout: preview has a neutral grey background (not white or transparent)",
+    /^rgb\((\d+), \1, \1\)$/.test(desktop.background) &&
+      desktop.background !== "rgb(255, 255, 255)",
+    desktop.background,
+  );
+  check(
+    "layout desktop: no horizontal page scroll",
+    desktop.overflowX <= 0,
+    String(desktop.overflowX),
+  );
+  await setEditor("voucher-template-html", `<p>unsaved-html {{code}}</p>`);
+  await clickButton("Template Script");
+  await setEditor("voucher-template-script", `/* unsaved-script */`);
+  await clickButton("Template CSS");
+  await clickButton("Card HTML");
+  check(
+    "layout: switching tabs keeps unsaved edits in every editor",
+    await evaluate<boolean>(
+      `document.getElementById('voucher-template-html').value.includes('unsaved-html') && document.getElementById('voucher-template-script').value === '/* unsaved-script */'`,
+    ),
+  );
+  check(
+    "layout: only the selected tab's editor is visible",
+    await evaluate<boolean>(
+      `document.getElementById('voucher-template-html').offsetParent !== null && document.getElementById('voucher-template-css').offsetParent === null && document.getElementById('voucher-template-script').offsetParent === null`,
+    ),
+  );
+  await clickButton("Template Script");
+  check(
+    "layout: Run, trust warning and Save stay reachable on the Script tab",
+    await evaluate<boolean>(
+      `['Run', 'Save template', 'Reset to default'].every(l => Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === l && b.offsetParent !== null)) && !!document.querySelector('[role=note]')?.offsetParent`,
+    ),
+  );
+  await clickButton("Card HTML");
+  await screenshot("layout-desktop.png");
+  await call("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  await Bun.sleep(300);
+  const phone = await evaluate<Geometry>(geometry);
+  check(
+    "layout phone: preview is stacked below the editors",
+    phone.preview.top >= phone.editors.bottom - 1,
+    JSON.stringify(phone),
+  );
+  check(
+    "layout phone: no horizontal page scroll",
+    phone.overflowX <= 0,
+    String(phone.overflowX),
+  );
+  await screenshot("layout-phone.png");
+  await call("Emulation.setDeviceMetricsOverride", {
+    width: 1280,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  // Restore the editors so later cases start from the saved template.
+  await openVouchers("Template");
+  await waitFor(
+    `document.querySelector('${PREVIEW}')?.dataset.renderStatus === 'ready'`,
+    "preview ready after layout checks",
+    100,
+  );
 
   const grow = await previewCase({
     name: "tall",
