@@ -24,6 +24,8 @@
   import { buildVoucherBatchCsv } from "../voucherCsv";
   import {
     buildVoucherDocument,
+    runVoucherFrame,
+    type RenderResult,
     type VoucherTokenValues,
   } from "../voucherTemplate";
 
@@ -86,14 +88,52 @@
   let templateHtml = $state("");
   let templateCss = $state("");
   let templateBusy = $state(false);
-  let previewDocument = $derived(
-    buildVoucherDocument({ html: templateHtml, css: templateCss }, [
-      {
-        ...SAMPLE_VALUES,
-        shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
+  let previewFrame = $state<HTMLIFrameElement>();
+  let previewStatus = $state<"rendering" | RenderResult["type"]>("rendering");
+  let previewMessage = $state("");
+  let previewHeight = $state<number | null>(null);
+  let previewSeq = $state(0);
+  let previewRenders = 0;
+  // Cleaning can fail (a card loses its code); that is shown like any render error.
+  let previewDocument = $derived.by<
+    { srcdoc: string; error?: undefined } | { error: string; srcdoc?: undefined }
+  >(() => {
+    try {
+      return {
+        srcdoc: buildVoucherDocument({ html: templateHtml, css: templateCss }, [
+          {
+            ...SAMPLE_VALUES,
+            shop_name: adminSettings?.shop_name ?? "OpenPiso Shop",
+          },
+        ]),
+      };
+    } catch (caught) {
+      return { error: caughtMessage(caught) };
+    }
+  });
+
+  // Re-render the sandboxed preview frame whenever the template changes.
+  $effect(() => {
+    const frame = previewFrame;
+    const built = previewDocument;
+    if (!frame) return;
+    previewSeq = ++previewRenders;
+    previewStatus = "rendering";
+    previewMessage = "";
+    if (built.error !== undefined) {
+      frame.srcdoc = "";
+      previewStatus = "error";
+      previewMessage = built.error;
+      return;
+    }
+    return runVoucherFrame(frame, built.srcdoc, {
+      onResult(result) {
+        previewStatus = result.type;
+        if (result.type === "ready") previewHeight = result.height;
+        else previewMessage = result.message;
       },
-    ]),
-  );
+    });
+  });
 
   async function load() {
     busy = true;
@@ -503,47 +543,48 @@
       templateHtml = freshTemplate.html;
       templateCss = freshTemplate.css;
 
+      // Build first: a card that loses its code throws before any frame exists.
+      const srcdoc = buildVoucherDocument(
+        freshTemplate,
+        freshDetail.vouchers.map((card) =>
+          tokenValuesForCard(card, freshDetail, freshSettings.shop_name),
+        ),
+        { print: true },
+      );
+
+      // The frame is cross-origin, so it calls its own print() once ready.
       const printFrame = document.createElement("iframe");
       printFrame.title = `Print ${freshDetail.name} voucher batch`;
-      printFrame.setAttribute("sandbox", "allow-same-origin allow-modals");
+      printFrame.setAttribute("sandbox", "allow-scripts allow-modals");
+      printFrame.dataset.voucherPrint = "";
+      printFrame.dataset.renderStatus = "rendering";
       printFrame.style.position = "fixed";
       printFrame.style.width = "1px";
       printFrame.style.height = "1px";
       printFrame.style.border = "0";
       printFrame.style.opacity = "0";
-      const cleanup = () => printFrame.remove();
-      printFrame.addEventListener(
-        "load",
-        () => {
-          const printWindow = printFrame.contentWindow;
-          if (!printWindow) {
-            cleanup();
-            reportActionFailure(
-              "print",
-              "Voucher Batch",
-              new Error("Print window unavailable"),
-            );
+      let stop = () => {};
+      const cleanup = () => {
+        stop();
+        printFrame.remove();
+      };
+      document.body.append(printFrame);
+      stop = runVoucherFrame(printFrame, srcdoc, {
+        onResult(result) {
+          printFrame.dataset.renderStatus = result.type;
+          if (result.type === "ready") {
+            window.setTimeout(cleanup, 60_000);
             return;
           }
-          try {
-            printWindow.addEventListener("afterprint", cleanup, { once: true });
-            printWindow.focus();
-            printWindow.print();
-            window.setTimeout(cleanup, 60_000);
-          } catch (caught) {
-            cleanup();
-            reportActionFailure("print", "Voucher Batch", caught);
-          }
+          cleanup();
+          reportActionFailure(
+            "print",
+            "Voucher Batch",
+            new Error(result.message),
+          );
         },
-        { once: true },
-      );
-      printFrame.srcdoc = buildVoucherDocument(
-        freshTemplate,
-        freshDetail.vouchers.map((card) =>
-          tokenValuesForCard(card, freshDetail, freshSettings.shop_name),
-        ),
-      );
-      document.body.append(printFrame);
+        onAfterPrint: cleanup,
+      });
     } catch (caught) {
       reportActionFailure("print", "Voucher Batch", caught);
     } finally {
@@ -1410,12 +1451,28 @@
       </div>
       <div class="rounded-lg border bg-card p-6">
         <h3 class="mb-4 text-lg font-semibold">Live Preview</h3>
-        <iframe
-          title="Voucher template live preview"
-          sandbox="allow-same-origin"
-          srcdoc={previewDocument}
-          class="h-[32rem] w-full rounded-md border bg-white"
-        ></iframe>
+        <div
+          data-voucher-render="preview"
+          data-render-status={previewStatus}
+          data-render-seq={previewSeq}
+        >
+          <iframe
+            bind:this={previewFrame}
+            title="Voucher template live preview"
+            sandbox="allow-scripts allow-modals"
+            style:height={previewHeight === null ? undefined : `${previewHeight}px`}
+            class="w-full rounded-md border bg-white"
+          ></iframe>
+          {#if previewMessage}
+            <p
+              role="alert"
+              data-render-error
+              class="mt-3 text-sm text-destructive"
+            >
+              {previewMessage}
+            </p>
+          {/if}
+        </div>
       </div>
     </div>
   {/if}

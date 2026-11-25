@@ -559,6 +559,43 @@ requests, fixture versions/schema, result), and `admin.log`. A failed browser ru
 captures `failure.png`; a failed launcher still writes the fixture report. Screenshots,
 logs and retained DBs are local test artifacts, not suitable for publishing unchecked.
 
+### Voucher render frame harness
+
+Drives the real Web Admin's Voucher Template preview and Voucher Batch print
+through the sandboxed render frame (`allow-scripts allow-modals`, nonce-only
+CSP). Covers: sandbox attributes, preview render and frame height (grows and
+shrinks), a card that loses its code, a render that never reports (timeout),
+the print path for a real 3-card batch reaching `ready` and calling `print()`,
+frame cleanup after `afterprint`, failed prints blocked with a visible error,
+and the HTML/CSS-only attack corpus (spec #33) run through both preview and print.
+Corpus pass means no request left the frame (a local HTTP listener, a raw TCP
+port for preconnect/SNI, and CDP frame requests not blocked by CSP) and either
+`ready` with every card's code present or a visible error/timeout.
+
+Same prerequisites as the App Update launcher (Linux, free ports `8080` and
+`3210`, debug Admin binary, built Web Admin); it starts its own Admin on a fresh
+`XDG_DATA_HOME` and sets up the Owner over real HTTP.
+
+```bash
+bun run build:web-admin
+cargo build -p openpiso-admin
+bun run apps/web-admin/scripts/voucher-render-frame-browser.ts
+```
+
+Env: `OPENPISO_ADMIN_BINARY`, `OPENPISO_E2E_OUT` (default
+`/tmp/openpiso-voucher-render-frame-<timestamp>`), `CHROME_PATH`. Outputs
+`voucher-render-frame.json` (every check plus one row per corpus case),
+`preview-*.png` screenshots and `admin.log`.
+
+Headless Chrome cannot show the print dialog, so the harness injects test-only
+hooks into the frame over CDP (never in production code): `print()` is replaced
+by a logger that fires `afterprint` after 1.5 s, and the "never reports" cases
+silence `parent.postMessage`. Run the corpus in a **full** Chrome, not
+`chromium_headless_shell`: only the former honours `rel=preconnect`.
+
+**Manual check (Owner, headed Chrome):** print a Voucher Batch from the Batches
+tab. The print dialog opens, and the hidden frame is removed afterwards.
+
 ### Fullscreen Lock harness
 
 Covers every lock
