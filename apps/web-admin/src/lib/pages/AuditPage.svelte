@@ -190,6 +190,7 @@
           <option value="points">Points</option>
           <option value="admin">Admin</option>
           <option value="system">System</option>
+          <option value="custody">Custody</option>
         </select>
       </div>
 

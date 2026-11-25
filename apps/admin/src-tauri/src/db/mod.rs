@@ -6,6 +6,7 @@ pub mod attendance_client;
 pub mod attendance_earning;
 pub mod attendance_reports;
 pub mod backup_schedule;
+pub mod cash_collections;
 pub mod coin_outcome;
 pub mod coin_promo;
 pub mod coins;
@@ -46,6 +47,7 @@ pub use account_sessions::{
     start as start_account_session,
 };
 pub use backup_schedule::{backup_schedule_settings, update_backup_schedule};
+pub use cash_collections::{cash_on_hand, collect_cash};
 pub use coin_promo::{
     coin_promo_menu, coin_promo_settings, preview_coin_promo_settings, update_coin_promo_settings,
 };
@@ -100,7 +102,7 @@ pub use voucher_batches::{
 };
 pub use vouchers::{create_voucher, redeem_voucher, void_voucher, vouchers};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 59;
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 60;
 
 pub async fn connect(database_path: &Path, backup_directory: &Path) -> AppResult<SqlitePool> {
     let options = SqliteConnectOptions::new()
@@ -372,6 +374,10 @@ pub(crate) async fn run_migrations(pool: &SqlitePool, backup_directory: &Path) -
         (
             59_i64,
             include_str!("../../migrations/0059_wheel_password_confirmation.sql"),
+        ),
+        (
+            60_i64,
+            include_str!("../../migrations/0060_cash_collections.sql"),
         ),
     ];
     let known_version = migrations.last().map(|(version, _)| *version).unwrap_or(0);

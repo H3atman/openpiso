@@ -18,11 +18,60 @@ impl ReportPeriod {
         }
     }
 
-    pub const fn sqlite_column(self) -> &'static str {
+    /// SQL expression that labels a reporting-view row's bucket. Weeks are
+    /// labelled by their Monday (`YYYY-MM-DD`), so a Monday–Sunday week that
+    /// spans New Year stays one bucket.
+    pub const fn sqlite_bucket(self) -> &'static str {
         match self {
             Self::Day => "business_date",
-            Self::Week => "business_week",
+            Self::Week => "date(business_date, 'weekday 0', '-6 days')",
             Self::Month => "business_month",
+        }
+    }
+}
+
+/// The two halves of Cash Revenue, grouped by audit event type. Coin Sales
+/// is what lands in the coin box; Voucher Sales is counter cash recognised
+/// per ADR-0020/ADR-0040. Together they cover the `report_cash_revenue`
+/// allowlist exactly, so Cash Revenue = Coin Sales + Voucher Sales.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SalesKind {
+    Coin,
+    Voucher,
+}
+
+impl SalesKind {
+    pub const fn event_types(self) -> &'static [&'static str] {
+        match self {
+            Self::Coin => &["coin_accepted", "rejection_credit"],
+            Self::Voucher => &["voucher_sold", "sold_voucher_redeemed"],
+        }
+    }
+}
+
+/// The two places cash piles up, and so the two kinds of Cash Collection
+/// (ADR-0091). Each kind collects exactly one [`SalesKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CashCollectionKind {
+    CoinBox,
+    VoucherCash,
+}
+
+impl CashCollectionKind {
+    /// The stored `cash_collections.kind` value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CoinBox => "coin_box",
+            Self::VoucherCash => "voucher_cash",
+        }
+    }
+
+    pub const fn sales_kind(self) -> SalesKind {
+        match self {
+            Self::CoinBox => SalesKind::Coin,
+            Self::VoucherCash => SalesKind::Voucher,
         }
     }
 }
@@ -39,6 +88,7 @@ pub enum AuditCategory {
     Points,
     Admin,
     System,
+    Custody,
 }
 
 impl AuditCategory {
@@ -50,6 +100,7 @@ impl AuditCategory {
             Self::Points => "points",
             Self::Admin => "admin",
             Self::System => "system",
+            Self::Custody => "custody",
         }
     }
 
@@ -109,6 +160,7 @@ impl AuditCategory {
                 "account_import_completed",
             ],
             Self::System => &["legacy_event", "tamper_kill", "shop_opened", "shop_closed"],
+            Self::Custody => &["cash_collected"],
         }
     }
 }
@@ -124,6 +176,7 @@ pub fn category_for_event_type(event_type: &str) -> Option<AuditCategory> {
         AuditCategory::Points,
         AuditCategory::Admin,
         AuditCategory::System,
+        AuditCategory::Custody,
     ]
     .into_iter()
     .find(|category| category.event_types().contains(&event_type))
@@ -141,14 +194,6 @@ mod tests {
             (ReportPeriod::Month, "month"),
         ] {
             assert_eq!(period.as_str(), expected);
-            assert_eq!(
-                period.sqlite_column(),
-                match period {
-                    ReportPeriod::Day => "business_date",
-                    ReportPeriod::Week => "business_week",
-                    ReportPeriod::Month => "business_month",
-                }
-            );
         }
     }
 
@@ -162,6 +207,7 @@ mod tests {
             AuditCategory::Points,
             AuditCategory::Admin,
             AuditCategory::System,
+            AuditCategory::Custody,
         ] {
             for event_type in category.event_types() {
                 assert!(

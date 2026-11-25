@@ -1001,8 +1001,41 @@ files evaporate on reboot). See
 ### Cash Revenue **(decided)**
 
 The reporting top line: **cash that entered the shop** — coins through the
-terminal plus `sold` vouchers. Never blended with free time given away. See
+terminal plus `sold` vouchers. Never blended with free time given away. It is
+exactly **Coin Sales** plus **Voucher Sales**. See
 [ADR-0014](adr/0014-reporting-model.md).
+
+### Coin Sales **(decided)**
+
+The part of **Cash Revenue** that is physically in the coin box: accepted
+coins plus **Rejection Credits**. Distinct from **Voucher Sales**, whose cash
+never enters the box. See
+[ADR-0091](adr/0091-cash-collection-records-custody-not-revenue.md).
+
+### Voucher Sales **(decided)**
+
+The part of **Cash Revenue** from `sold` vouchers — cash the owner took at the
+counter, never through the coin acceptor. Distinct from **Coin Sales**. See
+[ADR-0091](adr/0091-cash-collection-records-custody-not-revenue.md).
+
+### Cash Collection **(decided)**
+
+An owner action recording that cash has been taken from where it accumulated.
+Two kinds: a **Coin Box Collection** (emptying the coin box, covering **Coin
+Sales**) and a **Voucher Cash Collection** (taking counter cash, covering
+**Voucher Sales**). One action collects everything of its kind not yet
+collected, up to that moment; the amount is the system's figure, not an owner
+count. It records custody only: it never lowers Coin Sales, Voucher Sales, or
+Cash Revenue. Stored in `cash_collections` plus a `custody` Audit Log event; no
+undo. See [ADR-0091](adr/0091-cash-collection-records-custody-not-revenue.md).
+_Avoid_: coins out, cash out, withdrawal, payout.
+
+### Uncollected **(decided)**
+
+For one kind of **Cash Collection**, all-time sales of that kind minus the sum
+of that kind's collections — the cash the system believes is still in the coin
+box (or at the counter). There is no timestamp cut-off. See
+[ADR-0091](adr/0091-cash-collection-records-custody-not-revenue.md).
 
 ### Free Time Dispensed **(decided)**
 

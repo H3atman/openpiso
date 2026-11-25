@@ -61,9 +61,9 @@ const dashboard: DashboardSnapshot = {
   ],
   recent_transactions: [],
   today: {
-    sales_cents: 0,
-    transaction_count: 0,
-    seconds_sold: 0,
+    coin_sales_cents: 0,
+    voucher_sales_cents: 0,
+    cash_revenue_cents: 0,
   },
   pc_monitoring: {
     enabled: true,
@@ -90,6 +90,28 @@ describe("Dashboard PC clock advisory", () => {
     expect(
       view.queryByText("Client clock is 1 min behind the Admin clock."),
     ).toBeNull();
+  });
+});
+
+describe("Dashboard today split", () => {
+  it("shows Coin Sales, Voucher Sales and the total", async () => {
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+    vi.mocked(api.getDashboard).mockResolvedValue({
+      ...dashboard,
+      today: {
+        coin_sales_cents: 700,
+        voucher_sales_cents: 2_500,
+        cash_revenue_cents: 3_200,
+      },
+    });
+    const view = render(DashboardPage);
+
+    const tile = await waitFor(() => view.getByLabelText("Today's sales"));
+    expect(tile.textContent).toContain("₱32.00");
+    expect(within(tile).getByText("Coin Sales").parentElement?.textContent).toContain("₱7.00");
+    expect(within(tile).getByText("Voucher Sales").parentElement?.textContent).toContain("₱25.00");
+    expect(view.queryByText("Time Sold Today")).toBeNull();
   });
 });
 

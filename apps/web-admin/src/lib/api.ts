@@ -66,7 +66,11 @@ import type {
   RejectionDenominations,
   ReportPeriod,
   ReportSummary,
+  PcSalesReport,
   SalesReportOverview,
+  CashCollection,
+  CashCollectionKind,
+  CashOnHand,
   ShopHoursSettings,
   ShopHoursSettingsInput,
   ShopOverrideInput,
@@ -680,10 +684,33 @@ export function getReportSummary(
   });
 }
 
+/// `POST /web-admin/reports/pc-sales` — Coin and Voucher Sales per PC, plus the
+/// unassigned row, for an inclusive range of business dates.
+export function getPcSales(fromDate: string, toDate: string): Promise<PcSalesReport> {
+  return request<PcSalesReport>("/web-admin/reports/pc-sales", {
+    method: "POST",
+    body: JSON.stringify({ from_date: fromDate, to_date: toDate }),
+  });
+}
+
 /// `GET /web-admin/reports/overview` — the current sales cards and all-PC
 /// sales breakdown used by the Sales Report page.
 export function getSalesReportOverview(): Promise<SalesReportOverview> {
   return request<SalesReportOverview>("/web-admin/reports/overview");
+}
+
+/// `GET /web-admin/cash-on-hand` — Uncollected and last collection per kind.
+export function getCashOnHand(): Promise<CashOnHand> {
+  return request<CashOnHand>("/web-admin/cash-on-hand");
+}
+
+/// `POST /web-admin/cash-collections` — carries only the kind; the Admin
+/// computes and returns the recorded amount.
+export function collectCash(kind: CashCollectionKind): Promise<CashCollection> {
+  return request<CashCollection>("/web-admin/cash-collections", {
+    method: "POST",
+    body: JSON.stringify({ kind }),
+  });
 }
 
 export function getAttendanceReport(
