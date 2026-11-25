@@ -68,9 +68,14 @@ function dailyBuckets(fromDate: string, toDate: string): ReportBucket[] {
   for (let date = new Date(`${fromDate}T00:00:00Z`); ; date.setUTCDate(date.getUTCDate() + 1)) {
     const label = isoDate(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
     if (label > toDate) return buckets;
+    const cash = daySales(label);
+    // Roughly a fifth of each day's sales is counter voucher cash.
+    const voucher = Math.floor(cash / 500) * 100;
     buckets.push({
       period_label: label,
-      cash_revenue_cents: daySales(label),
+      coin_sales_cents: cash - voucher,
+      voucher_sales_cents: voucher,
+      cash_revenue_cents: cash,
       free_time_dispensed_seconds: 0,
       points_minted_by_wheel_centi: 0,
     });
@@ -83,6 +88,8 @@ function summary(fromDate: string, toDate: string): ReportSummary {
     period: "day",
     from_date: fromDate,
     to_date: toDate,
+    coin_sales_cents: buckets.reduce((sum, bucket) => sum + bucket.coin_sales_cents, 0),
+    voucher_sales_cents: buckets.reduce((sum, bucket) => sum + bucket.voucher_sales_cents, 0),
     cash_revenue_cents: buckets.reduce((sum, bucket) => sum + bucket.cash_revenue_cents, 0),
     free_time_dispensed_seconds: 0,
     points_minted_by_wheel_centi: 0,

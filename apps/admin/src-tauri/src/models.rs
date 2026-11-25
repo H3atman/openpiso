@@ -1182,6 +1182,9 @@ pub struct HealthStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportBucket {
     pub period_label: String,
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+    /// Always `coin_sales_cents + voucher_sales_cents`.
     pub cash_revenue_cents: i64,
     pub free_time_dispensed_seconds: i64,
     pub points_minted_by_wheel_centi: i64,
@@ -1192,6 +1195,9 @@ pub struct ReportSummary {
     pub period: ReportPeriod,
     pub from_date: String,
     pub to_date: String,
+    pub coin_sales_cents: i64,
+    pub voucher_sales_cents: i64,
+    /// Always `coin_sales_cents + voucher_sales_cents`.
     pub cash_revenue_cents: i64,
     pub free_time_dispensed_seconds: i64,
     pub points_minted_by_wheel_centi: i64,

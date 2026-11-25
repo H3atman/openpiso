@@ -6151,6 +6151,159 @@ mod tests {
         assert_eq!(body["seconds_delta"], 300);
     }
 
+    /// Coin Sales (accepted coins + Rejection Credits) and Voucher Sales
+    /// (single-mint sold vouchers + batch cards recognised at redemption) are
+    /// reported beside Cash Revenue, which is always their sum (#35).
+    #[tokio::test]
+    async fn report_summary_splits_coin_and_voucher_sales() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let sessions = state.sessions.clone();
+        let account = accounts::create(
+            &pool,
+            "split-redeemer",
+            "password",
+            AccountCreator::Admin,
+            None,
+        )
+        .await
+        .expect("account should be created");
+        sqlx::query(
+            "INSERT INTO audit_log
+             (id, event_type, outcome, actor, pc_id, summary, metadata_json, created_at)
+             VALUES ('split-rejection', 'coin_batch_rejected', 'failure', 'system', 'pc-01',
+                     'rejected', '{\"pulse_count\":11}', CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .expect("rejection fixture should insert");
+        let address = spawn(state).await;
+        let client = reqwest::Client::new();
+        let token = setup_and_token(&client, &address, "split-pin").await;
+        let auth = |request: reqwest::RequestBuilder| request.owner(&token);
+
+        for (pc_id, amount_cents) in [("pc-01", 100), ("pc-02", 500)] {
+            sessions
+                .record_coin_event(
+                    &pool,
+                    &crate::models::CoinEventInput {
+                        pc_id: pc_id.to_owned(),
+                        amount_cents,
+                        pulse_count: Some(1),
+                        timestamp: None,
+                    },
+                    &crate::models::CoinSourceClaim::Simulator,
+                )
+                .await
+                .expect("coin should be accepted");
+        }
+        let sold = auth(client.post(format!("http://{address}/web-admin/vouchers")))
+            .json(&serde_json::json!({
+                "seconds_value": 600, "points_value_centi": 0,
+                "sold_amount_cents": 2_000, "expires_at": null
+            }))
+            .send()
+            .await
+            .expect("sold voucher should complete");
+        assert_eq!(sold.status(), StatusCode::OK);
+        let batch = auth(client.post(format!("http://{address}/web-admin/voucher-batches")))
+            .json(&serde_json::json!({
+                "prefix": "SOLD", "suffix_length": 8, "count": 1,
+                "seconds_value": 600, "points_value_centi": 0, "cash_amount_cents": 500
+            }))
+            .send()
+            .await
+            .expect("batch should complete")
+            .json::<serde_json::Value>()
+            .await
+            .expect("batch JSON");
+        let code: String = sqlx::query_scalar("SELECT code FROM vouchers WHERE batch_id = ?")
+            .bind(batch["id"].as_str().expect("batch id"))
+            .fetch_one(&pool)
+            .await
+            .expect("batch card should exist");
+        db::redeem_voucher(&pool, &account.id, "pc-02", &code)
+            .await
+            .expect("batch card should redeem");
+        let credit = auth(client.post(format!("http://{address}/web-admin/rejection-credits")))
+            .json(&serde_json::json!({
+                "rejection_audit_id": "split-rejection",
+                "denomination_cents": 100, "coins": 1, "dry_run": false
+            }))
+            .send()
+            .await
+            .expect("rejection credit should complete");
+        assert_eq!(credit.status(), StatusCode::OK);
+
+        let summary = |body: serde_json::Value| {
+            let request = auth(client.post(format!("http://{address}/web-admin/reports/summary")));
+            async move {
+                let response = request
+                    .json(&body)
+                    .send()
+                    .await
+                    .expect("summary should complete");
+                assert_eq!(response.status(), StatusCode::OK);
+                response
+                    .json::<serde_json::Value>()
+                    .await
+                    .expect("summary JSON")
+            }
+        };
+
+        // Today: coins 100 + 500 + credit 100; vouchers 2000 + batch 500.
+        let today = summary(serde_json::json!({ "period": "day" })).await;
+        assert_eq!(today["coin_sales_cents"], 700);
+        assert_eq!(today["voucher_sales_cents"], 2_500);
+        assert_eq!(today["cash_revenue_cents"], 3_200);
+        let bucket = &today["buckets"][0];
+        assert_eq!(today["buckets"].as_array().map(Vec::len), Some(1));
+        assert_eq!(bucket["coin_sales_cents"], 700);
+        assert_eq!(bucket["voucher_sales_cents"], 2_500);
+        assert_eq!(bucket["cash_revenue_cents"], 3_200);
+
+        // Mon 2025-12-29 .. Sun 2026-01-04 is one week across New Year.
+        for (id, event_type, amount_cents, created_at) in [
+            ("ny-coin", "coin_accepted", 100, "2025-12-29T12:00:00Z"),
+            ("ny-voucher", "voucher_sold", 2_000, "2026-01-03T12:00:00Z"),
+            ("ny-next", "coin_accepted", 500, "2026-01-05T12:00:00Z"),
+        ] {
+            sqlx::query(
+                "INSERT INTO audit_log
+                 (id, event_type, outcome, actor, amount_cents, cash_flag, summary, created_at)
+                 VALUES (?, ?, 'success', 'system', ?, 1, 'fixture', ?)",
+            )
+            .bind(id)
+            .bind(event_type)
+            .bind(amount_cents)
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .expect("New Year fixture should insert");
+        }
+        let range = |period: &str| serde_json::json!({ "period": period, "from_date": "2025-12-01", "to_date": "2026-01-31" });
+        let weeks = summary(range("week")).await;
+        assert_eq!(
+            weeks["buckets"],
+            serde_json::json!([
+                { "period_label": "2025-12-29", "coin_sales_cents": 100, "voucher_sales_cents": 2_000,
+                  "cash_revenue_cents": 2_100, "free_time_dispensed_seconds": 0,
+                  "points_minted_by_wheel_centi": 0 },
+                { "period_label": "2026-01-05", "coin_sales_cents": 500, "voucher_sales_cents": 0,
+                  "cash_revenue_cents": 500, "free_time_dispensed_seconds": 0,
+                  "points_minted_by_wheel_centi": 0 },
+            ])
+        );
+        let months = summary(range("month")).await;
+        let labels: Vec<&str> = months["buckets"]
+            .as_array()
+            .expect("month buckets")
+            .iter()
+            .map(|bucket| bucket["period_label"].as_str().expect("label"))
+            .collect();
+        assert_eq!(labels, ["2025-12", "2026-01"]);
+    }
+
     #[tokio::test]
     async fn account_list_derives_last_login_and_preserves_it_for_deleted_accounts() {
         let state = test_state().await;

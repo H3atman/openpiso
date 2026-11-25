@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
 import { fireEvent, render, waitFor, within } from "@testing-library/svelte";
 import * as api from "../api";
 import ReportsPage from "./ReportsPage.svelte";
+import { formatMoney } from "../format";
 
 const overview = {
   daily: {
@@ -56,6 +57,8 @@ const dailySummary = {
   period: "day" as const,
   from_date: "2026-08-01",
   to_date: "2026-08-31",
+  coin_sales_cents: 1_700,
+  voucher_sales_cents: 300,
   cash_revenue_cents: 2_000,
   free_time_dispensed_seconds: 0,
   points_minted_by_wheel_centi: 0,
@@ -63,12 +66,16 @@ const dailySummary = {
   buckets: [
     {
       period_label: "2026-08-02",
+      coin_sales_cents: 1_200,
+      voucher_sales_cents: 300,
       cash_revenue_cents: 1_500,
       free_time_dispensed_seconds: 0,
       points_minted_by_wheel_centi: 0,
     },
     {
       period_label: "2026-08-03",
+      coin_sales_cents: 500,
+      voucher_sales_cents: 0,
       cash_revenue_cents: 500,
       free_time_dispensed_seconds: 0,
       points_minted_by_wheel_centi: 0,
@@ -269,6 +276,8 @@ describe("Sales Report", () => {
       buckets: [
         {
           period_label: `${year}-${pad2(month)}-02`,
+          coin_sales_cents: 1_200,
+          voucher_sales_cents: 300,
           cash_revenue_cents: 1_500,
           free_time_dispensed_seconds: 0,
           points_minted_by_wheel_centi: 0,
@@ -282,6 +291,11 @@ describe("Sales Report", () => {
       view.getByRole("table", { name: /^Daily sales for/ }),
     );
     // Header row plus the 1st, 2nd, and 3rd only.
-    expect(within(chart).getAllByRole("row")).toHaveLength(4);
+    const rows = within(chart).getAllByRole("row");
+    expect(rows).toHaveLength(4);
+    // The 2nd plots the server's Coin/Voucher split and its total.
+    expect(
+      [...(rows[2]?.querySelectorAll("td") ?? [])].map((cell) => cell.textContent),
+    ).toEqual([formatMoney(1_200), formatMoney(300), formatMoney(1_500)]);
   });
 });

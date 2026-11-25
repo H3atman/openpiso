@@ -18,11 +18,34 @@ impl ReportPeriod {
         }
     }
 
-    pub const fn sqlite_column(self) -> &'static str {
+    /// SQL expression that labels a reporting-view row's bucket. Weeks are
+    /// labelled by their Monday (`YYYY-MM-DD`), so a Monday–Sunday week that
+    /// spans New Year stays one bucket.
+    pub const fn sqlite_bucket(self) -> &'static str {
         match self {
             Self::Day => "business_date",
-            Self::Week => "business_week",
+            Self::Week => "date(business_date, 'weekday 0', '-6 days')",
             Self::Month => "business_month",
+        }
+    }
+}
+
+/// The two halves of Cash Revenue, grouped by audit event type. Coin Sales
+/// is what lands in the coin box; Voucher Sales is counter cash recognised
+/// per ADR-0020/ADR-0040. Together they cover the `report_cash_revenue`
+/// allowlist exactly, so Cash Revenue = Coin Sales + Voucher Sales.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SalesKind {
+    Coin,
+    Voucher,
+}
+
+impl SalesKind {
+    pub const fn event_types(self) -> &'static [&'static str] {
+        match self {
+            Self::Coin => &["coin_accepted", "rejection_credit"],
+            Self::Voucher => &["voucher_sold", "sold_voucher_redeemed"],
         }
     }
 }
@@ -141,14 +164,6 @@ mod tests {
             (ReportPeriod::Month, "month"),
         ] {
             assert_eq!(period.as_str(), expected);
-            assert_eq!(
-                period.sqlite_column(),
-                match period {
-                    ReportPeriod::Day => "business_date",
-                    ReportPeriod::Week => "business_week",
-                    ReportPeriod::Month => "business_month",
-                }
-            );
         }
     }
 
