@@ -67,6 +67,9 @@ import type {
   ReportPeriod,
   ReportSummary,
   SalesReportOverview,
+  CashCollection,
+  CashCollectionKind,
+  CashOnHand,
   ShopHoursSettings,
   ShopHoursSettingsInput,
   ShopOverrideInput,
@@ -684,6 +687,20 @@ export function getReportSummary(
 /// sales breakdown used by the Sales Report page.
 export function getSalesReportOverview(): Promise<SalesReportOverview> {
   return request<SalesReportOverview>("/web-admin/reports/overview");
+}
+
+/// `GET /web-admin/cash-on-hand` — Uncollected and last collection per kind.
+export function getCashOnHand(): Promise<CashOnHand> {
+  return request<CashOnHand>("/web-admin/cash-on-hand");
+}
+
+/// `POST /web-admin/cash-collections` — carries only the kind; the Admin
+/// computes and returns the recorded amount.
+export function collectCash(kind: CashCollectionKind): Promise<CashCollection> {
+  return request<CashCollection>("/web-admin/cash-collections", {
+    method: "POST",
+    body: JSON.stringify({ kind }),
+  });
 }
 
 export function getAttendanceReport(

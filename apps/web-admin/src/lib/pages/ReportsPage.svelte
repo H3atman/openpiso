@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../api";
+  import CashOnHandPanel from "../components/CashOnHandPanel.svelte";
   import DailySalesChart from "../components/DailySalesChart.svelte";
   import ResponsiveRows from "../components/ResponsiveRows.svelte";
   import AttendancePager from "../components/AttendancePager.svelte";
@@ -313,6 +314,8 @@
       </div>
     {/if}
   </section>
+
+  <CashOnHandPanel />
 
   <section class="rounded-lg border bg-card" aria-labelledby="daily-trend-heading">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">

@@ -30,7 +30,8 @@ export type NotificationAction =
   | "cancel-suppression"
   | "request"
   | "place"
-  | "download";
+  | "download"
+  | "collect";
 
 const actionCopy: Record<
   NotificationAction,
@@ -59,6 +60,7 @@ const actionCopy: Record<
   detect: { present: "detect", past: "detected" },
   "sign-out": { present: "sign out", past: "signed out" },
   suppress: { present: "suppress", past: "suppressed" },
+  collect: { present: "collect from", past: "collected from" },
   "cancel-suppression": {
     present: "cancel suppression for",
     past: "suppression cancelled",

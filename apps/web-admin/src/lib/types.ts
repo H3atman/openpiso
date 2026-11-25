@@ -639,7 +639,8 @@ export type AuditCategory =
   | "time"
   | "points"
   | "admin"
-  | "system";
+  | "system"
+  | "custody";
 
 export interface AuditFilter {
   limit?: number;
@@ -1216,3 +1217,22 @@ export interface AppUpdateState {
 // Centralized theme (ADR-0035): the raw record is defined next to the ramp
 // generator in @openpiso/ui; re-exported here so app code has one types entry.
 export type { ThemeMode, ThemeRecord } from "@openpiso/ui";
+
+export type CashCollectionKind = "coin_box" | "voucher_cash";
+
+export interface CashOnHandKind {
+  uncollected_cents: number;
+  last_collection: { amount_cents: number; collected_at: string } | null;
+}
+
+export interface CashOnHand {
+  coin_box: CashOnHandKind;
+  voucher_cash: CashOnHandKind;
+}
+
+/** What Collect recorded; the amount is computed by the Admin, never sent. */
+export interface CashCollection {
+  kind: CashCollectionKind;
+  amount_cents: number;
+  collected_at: string;
+}

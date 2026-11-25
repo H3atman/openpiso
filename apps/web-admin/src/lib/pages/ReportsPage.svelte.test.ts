@@ -5,6 +5,11 @@ vi.mock("../api", () => ({
   getSalesReportOverview: vi.fn(),
   getReportSummary: vi.fn(),
   getAttendanceReport: vi.fn(),
+  getCashOnHand: vi.fn().mockResolvedValue({
+    coin_box: { uncollected_cents: 0, last_collection: null },
+    voucher_cash: { uncollected_cents: 0, last_collection: null },
+  }),
+  collectCash: vi.fn(),
 }));
 
 import { fireEvent, render, waitFor, within } from "@testing-library/svelte";
